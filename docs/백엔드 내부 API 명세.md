@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |---|---|
 | 프로젝트명 | FitSet |
-| 문서 범위 | 내부 API — 유저 프로필·운동 기록 조회 (AI 루틴 추천용) |
+| 문서 범위 | 내부 API — 유저 프로필·운동 기록·종목 정보 조회 (AI 루틴 추천용) |
 | API 버전 | 미사용 — 내부 API는 버저닝 없음 (소비자가 AI 서버뿐이라 계약 변경은 배포 협의로 관리) |
 | Base URL | 환경별 호스트 + `/internal` |
 | 호출 주체 | AI 챗봇 서버 (서버간 내부망 호출 · 읽기 전용) |
@@ -13,7 +13,7 @@
 | Content-Type | `application/json` (성공·오류 공통) |
 | 문서 상태 | **초안 · 백엔드 협의 전** |
 | 참조 문서 | [01. API 설계 규약](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/11141148) · [04. 워크아웃 API 명세](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/11468801) |
-| 최종 수정일 | 2026년 7월 22일 |
+| 최종 수정일 | 2026년 7월 25일 |
 | 작성자 | @이주한 |
 
 ## 2. 공통 규칙
@@ -214,7 +214,7 @@ Request Body — 없음
         "exercises": [
           {
             "id": "le1...uuid",
-            "exerciseId": "b1a2...uuid",
+            "slug": "barbell-bench-press",
             "exerciseName": "바벨 벤치프레스",
             "orderIndex": 0,
             "sets": [
@@ -241,7 +241,7 @@ Request Body — 없음
 | `data.items[].endedAt` | DateTime | 종료 시각 |
 | `data.items[].exercises` | Array | 운동기록 목록 (orderIndex 오름차순) |
 | `data.items[].exercises[].id` | UUID | 식별자 |
-| `data.items[].exercises[].exerciseId` | UUID | 마스터 종목 참조 — AI 서버 운동 마스터와 조인 (협의 포인트 ④) |
+| `data.items[].exercises[].slug` | String | 마스터 종목 참조 — slug (협의 포인트 ④ 확정). 04 워크아웃 명세의 `exerciseId` 필드명도 `slug`로 변경 협의 필요 |
 | `data.items[].exercises[].exerciseName` | String | 종목 이름 (표시·디버깅용, 로직은 ID만 사용) |
 | `data.items[].exercises[].orderIndex` | Integer | 수행 순서 |
 | `data.items[].exercises[].sets` | Array | 세트 목록 (orderIndex 오름차순) |
@@ -263,17 +263,83 @@ Request Body — 없음
 | 401 | `UNAUTHORIZED` | 내부 인증 실패 (인증 도입 시) |
 | 404 | `USER_NOT_FOUND` | 존재하지 않는 userId |
 
+### 4.3 종목 정보 조회
+
+#### 기본 정보
+
+| 항목 | 값 |
+|---|---|
+| Method | GET |
+| URL | `/internal/exercises/{slug}` |
+| 권한 | 내부 서버 |
+| 설명 | 종목 마스터 단건을 반환한다. AI 서버가 루틴 payload 구성 시 썸네일 URL 등 마스터 정보를 조회·비교(검증)하는 용도. |
+| 연관 요구사항 | AI 루틴 추천 · 루틴 payload `thumbnailUrl` 채움 |
+
+#### 요청
+
+Path Parameter
+
+| 이름 | 타입 | 필수 | 설명 | 예시 |
+|---|---|---|---|---|
+| `slug` | String | Y | 종목 식별자 — **필드명도 `slug`로 통일** (2026-07-25 확정, UUID·exerciseId 표기 미사용) | `barbell-bench-press` |
+
+Query Parameter — 없음
+Request Body — 없음
+
+#### 응답
+
+성공 응답 — 200 OK
+
+```json
+{
+  "traceId": "01JXYZ",
+  "data": {
+    "slug": "barbell-bench-press",
+    "name": "바벨 벤치프레스",
+    "primaryMuscles": ["chest"],
+    "secondaryMuscles": ["shoulders", "triceps"],
+    "equipment": "barbell",
+    "difficulty": "intermediate",
+    "thumbnailUrl": "https://cdn.fitset.example/exercises/barbell-bench-press/thumb.jpg"
+  }
+}
+```
+
+응답 필드
+
+| 필드 | 타입 | Null | 설명 |
+|---|---|---|---|
+| `traceId` | UUID | N | 요청 추적 ID |
+| `data.slug` | String | N | 종목 식별자 — slug |
+| `data.name` | String | N | 종목 이름 — **한글명** (metadata `name_ko` 기준) |
+| `data.primaryMuscles` | Array\<String\> | N (1개 이상) | 주요 근육 — MUSCLE enum |
+| `data.secondaryMuscles` | Array\<String\> | N (빈 배열 가능) | 보조 근육 — MUSCLE enum |
+| `data.equipment` | String | N | 필요 장비 — EQUIP enum |
+| `data.difficulty` | String | N | 난이도 — DIFFICULTY enum |
+| `data.thumbnailUrl` | String | Y | 종목 썸네일 이미지 URL — 최대 500자. 미등록 시 `null` |
+
+- AI 서버 사용처: 루틴 응답의 `exercises[].thumbnailUrl`을 이 값으로 채우고, 보유 마스터(metadata)와 썸네일 정보를 비교·검증한다.
+
+오류 응답
+
+| HTTP | code | 상황 |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | 내부 인증 실패 (인증 도입 시) |
+| 404 | `EXERCISE_NOT_FOUND` | 존재하지 않는 slug |
+
 ## 5. API 목록
 
 | Method | Path | 설명 | 근거 |
 |---|---|---|---|
 | GET | `/internal/users/{userId}/profile` | 유저 프로필 조회 | AI 루틴 추천 |
 | GET | `/internal/users/{userId}/workouts` | 최근 운동 기록 조회 (raw) | AI 루틴 추천 |
+| GET | `/internal/exercises/{slug}` | 종목 정보 조회 (썸네일 포함) | 루틴 payload 썸네일 채움·검증 |
 
 ## 6. 에러 코드
 
 - 기존 코드: `INVALID_REQUEST` · `UNAUTHORIZED` — 01. API 설계 규약 §4의 코드를 그대로 쓴다.
 - 신규 제안: `USER_NOT_FOUND` — 내부 API는 Access Token이 아닌 Path의 userId로 대상을 지정하므로, 대상 부재를 표현할 코드가 필요하다 (01 카탈로그 추가 협의).
+- 신규 제안: `EXERCISE_NOT_FOUND` — §4.3 종목 조회의 대상 부재 표현.
 
 ## 7. 협의 포인트
 
@@ -282,7 +348,7 @@ Request Body — 없음
 | ① | 내부 인증 | 내부망 무인증인지, 내부 고정 토큰(`X-Internal-Token`) 등을 둘지 |
 | ② | enum 코드값 | ~~goal/level/bodyPart~~ → 팀 enum 카탈로그(GOAL/DIFFICULTY/MUSCLE/EQUIP)로 확정 반영(2026-07-22). `gender` 코드값만 미확정 |
 | ③ | `days` 상한 | 기본 14 제안, 최대치(예: 90) — 종목별 마지막 수행이 14일 밖일 수 있어 여유 필요 |
-| ④ | exerciseId 체계 | 워크아웃 기록의 `exerciseId`(UUID)가 AI 서버가 보유한 운동 마스터 ID와 동일 체계인지. 다르면 매핑 테이블 필요 |
+| ④ | 종목 식별자 체계 | ~~UUID 여부~~ → **확정(2026-07-25): 종목 식별자 = slug, 필드명도 `slug`로 통일, `name` = 한글명(metadata `name_ko`)**. 매핑 테이블 불필요 |
 | ⑤ | 세트 스키마 확장 | **요청사항(확정)**: 본 내부 API 응답에 세트별 `durationSec`·`restSec` 포함 — 무게 추천·강도 판단에 사용. 현 04. 워크아웃 명세의 세트 필드는 `weight`·`reps`뿐이므로 커밋(POST)·수정(PUT) API와 저장 스키마에 두 필드 추가가 선행되어야 함(앱 UI에는 이미 존재하는 값). 소급 불가한 과거 기록은 `null`. 맨몸 운동의 `weight` 표현(null vs 0)은 협의 필요 |
 | ⑥ | 보유 장비 | user_equipment 데이터가 백엔드에 존재하는지. 없으면 장비 필터는 v1 제외 또는 추천 요청 파라미터로 대체 |
 
@@ -294,3 +360,5 @@ Request Body — 없음
 | 2026-07-22 | 내부 API 버저닝 제거(Base URL `/internal`) · 세트에 `durationSec`·`restSec` 추가(협의 포인트 ⑤ 요청사항으로 확정) | @이주한 |
 | 2026-07-22 | enum을 팀 카탈로그 확정값으로 교체(GOAL/DIFFICULTY/MUSCLE, camelCase key) · EQUIP 참고 수록 | @이주한 |
 | 2026-07-22 | 내부 목록 응답에서 `page` 객체 제거 — 커서 미사용 확정, 필요 시 하위호환 추가로 도입 | @이주한 |
+| 2026-07-25 | §4.3 종목 정보 조회 API 추가 (thumbnailUrl 포함) · 종목 식별자=slug, name=한글명 확정 반영(협의 포인트 ④ 종결) | @이주한 |
+| 2026-07-25 | §4.3 필드명 `exerciseId` → `slug`로 변경 (경로·응답 모두) · §4.2 기록 응답의 종목 참조 필드명도 `slug`로 통일 (04 명세 협의 필요) | @이주한 |

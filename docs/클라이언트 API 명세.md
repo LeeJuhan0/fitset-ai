@@ -5,7 +5,7 @@
 
 ## 공통
 
-- Base URL: 환경별 호스트 + `/ai`, 호출 주체는 앱 클라이언트
+- Base URL: **AI 서버 호스트 + `/v1`** (예: `https://ai.example.com/v1/threads`) — 백엔드는 `api.example.com/v1/...`, AI 서버는 `ai.example.com/v1/...`로 **호스트 분리 + 경로 버저닝 확정** (2026-07-25 협의). 호출 주체는 앱 클라이언트
 - 인증: `Authorization: Bearer {accessToken}` — Gateway/ELB가 JWT 검증 후 `X-User-Id` 주입. 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
 - 목록 응답은 `data.items`, `page` 객체 없음 (스레드 최대 5개·메시지 전체 로드라 불필요)
@@ -16,14 +16,14 @@
 
 | Method | Path | 설명 | 성공 |
 | --- | --- | --- | --- |
-| POST | `/ai/routines/generate` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
-| GET | `/ai/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
-| POST | `/ai/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
-| DELETE | `/ai/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
-| GET | `/ai/threads/{threadId}/messages` | 대화 전체 시간순 조회 (payload 포함) | 200 |
-| POST | `/ai/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
+| POST | `/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
+| GET | `/v1/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
+| POST | `/v1/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
+| DELETE | `/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
+| GET | `/v1/threads/{threadId}/messages` | 대화 전체 시간순 조회 (payload 포함) | 200 |
+| POST | `/v1/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
 
-## 1. POST /ai/routines/generate
+## 1. POST /v1/routines
 
 홈 "AI 루틴 생성" 화면 입력값만 받는다. 신체 정보·수준·기록은 서버가 내부 API(08)로 조회. 대화 스레드를 생성하지 않는다.
 
@@ -50,7 +50,10 @@
   "estimatedMinutes": 50,
   "exercises": [
     {
-      "exerciseId": "uuid", "exerciseName": "덤벨 벤치프레스", "orderIndex": 0,
+      "slug": "dumbbell-bench-press",   // 종목 식별자 = slug (uuid 미사용, 2026-07-25 확정)
+      "exerciseName": "덤벨 벤치프레스",  // 한글명 (종목 마스터 name_ko)
+      "thumbnailUrl": "https://cdn.fitset.example/exercises/dumbbell-bench-press/thumb.jpg",  // 최대 500자, 미등록 null
+      "orderIndex": 0,
       "sets": [ { "orderIndex": 0, "weight": 12.0, "reps": 15 } ]
     }
   ]
@@ -59,14 +62,14 @@
 
 비즈니스 규칙:
 
-1. 프로필 `avoidBodyParts`는 `muscleGroups`와 무관하게 하드 필터 — 전부 충돌 시 `NO_ROUTINE_CANDIDATE`
+1. 프로필 `avoidBodyParts`는 하드 필터로 적용하되 **요청 `muscleGroups`와 겹치는 부위는 클라 요청 우선**(실효 기피 = `avoidBodyParts − muscleGroups`, 2026-07-25 확정). 기피(제외) 정보는 **요청 필드가 아니라 내부 API 프로필 조회값**이며 `null`(미설정)일 수 있음 — 비즈니스 규칙 §5의 "제외 운동"은 이 경로로 흡수
 2. 세트 `weight`는 최근 기록 기반 무게 추천값, 기록 없으면 신체 정보 기반 초기값. 맨몸은 `null`
 3. 파이프라인: 후보 룰 필터 → 룰 점수 정렬 → LLM 최종 구성
 4. `exercises[]`는 04 명세 루틴 구조와 호환 — 클라가 그대로 백엔드 `POST /routines`(루틴 저장)에 사용. AI 서버는 쓰기 없음
 
 오류: 400 `INVALID_REQUEST` / 401 / 404 `USER_NOT_FOUND` / 409 `NO_ROUTINE_CANDIDATE` / 503 `AI_UNAVAILABLE`
 
-## 2. GET /ai/threads
+## 2. GET /v1/threads
 
 ```json
 { "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z" } ] }
@@ -74,17 +77,17 @@
 
 - `title`: 첫 발화 기반 자동 생성, 첫 메시지 전이면 `null`. `lastMessageAt`: 빈 스레드면 `null`
 
-## 3. POST /ai/threads
+## 3. POST /v1/threads
 
 본문 없음 → `201` `{ "threadId": "oid", "createdAt": "..." }`
 
 - 유저당 활성 스레드 최대 5개, 초과 시 마지막 활동이 가장 오래된 스레드 삭제 후 생성 (협의 포인트 ③: 409 반환 대안 논의 중)
 
-## 4. DELETE /ai/threads/{threadId}
+## 4. DELETE /v1/threads/{threadId}
 
 `204 No Content`. 오류: 401 / 403 `THREAD_FORBIDDEN` / 404 `THREAD_NOT_FOUND`
 
-## 5. GET /ai/threads/{threadId}/messages
+## 5. GET /v1/threads/{threadId}/messages
 
 ```json
 {
@@ -98,7 +101,7 @@
 - user 메시지는 `responseScheme`·`payload` 모두 `null`
 - 오류: 401 / 403 / 404 (스레드 없음·만료)
 
-## 6. POST /ai/threads/{threadId}/messages
+## 6. POST /v1/threads/{threadId}/messages
 
 요청: `{ "content": "이 루틴에서 스쿼트 빼줘" }` (1~1000자)
 
@@ -124,7 +127,7 @@
 | --- | --- | --- |
 | `text` | 답변 전문 | 항상 `null` (키는 유지) |
 | `chart` | 차트 설명 문장 | 아래 chart payload |
-| `exerciseGif` | 운동 설명 | `{ "exerciseId": "uuid", "exerciseName": "..." }` — GIF URL은 클라가 종목 상세 API로 획득 |
+| `exerciseGif` | 운동 설명 | `{ "slug": "barbell-bench-press", "exerciseName": "..." }` — GIF URL은 클라가 종목 상세 API로 획득 |
 | `routine` | 추천 이유 | §1 `data.routine`과 동일 구조 — 추천 시점 스냅샷 (원본 수정·삭제와 무관하게 보존) |
 
 chart payload:
@@ -151,7 +154,7 @@ chart payload:
 
 ## 9. 협의 포인트 (미확정)
 
-1. Gateway 라우팅 prefix `/ai` — 버저닝(`/ai/v1`) 여부
+1. ~~Gateway 라우팅 prefix `/ai` — 버저닝(`/ai/v1`) 여부~~ → **확정(2026-07-25): 호스트 분리 + 경로 버저닝** — 백엔드 `api.example.com/v1/...`, AI 서버 `ai.example.com/v1/...`
 2. 스트리밍 — MVP 동기 JSON, SSE 도입 시점·게이트웨이 SSE 통과 설정
 3. 스레드 5개 초과 — 자동 삭제(+`deletedThreadId` 반환) vs 409 후 유저 직접 삭제
 4. 레이트리밋 — 메시지 분당·루틴 생성 일일 상한, Gateway 적용 여부
