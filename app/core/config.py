@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     llm_model_id: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
     llm_max_tokens: int = 1024
 
+    # 블로킹 호출용 스레드풀 크기. 기본값은 컨테이너 CPU 제한을 못 읽어 태스크당 목표 동시 요청 수로 명시한다
+    executor_max_workers: int = 24
+
     # 루틴 추천 파라미터 (CLAUDE.md 룰 필터·랭킹 확정 규칙)
     cosine_top_k: int = 30           # 코사인 상위 N
     llm_candidate_count: int = 5     # LLM 최종 선택 후보 수

@@ -68,7 +68,8 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         raise AiUnavailableError() from exc
     query = np.asarray(query_vector, dtype=np.float32)
     query /= np.linalg.norm(query) or 1.0
-    similarities = store.vectors[candidates] @ query
+    # 후보 행렬 복사를 피하려고 전체 행렬곱 후 후보만 취한다
+    similarities = (store.vectors @ query)[candidates]
     ranked = [candidates[i] for i in np.argsort(-similarities)]
     top = ranked[: settings.cosine_top_k]
     sampled = random.sample(top, min(settings.llm_candidate_count, len(top)))

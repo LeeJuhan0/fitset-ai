@@ -18,7 +18,11 @@ def _runtime():
     return boto3.client(
         "bedrock-runtime",
         region_name=settings.aws_region,
-        config=Config(retries={"max_attempts": 5, "mode": "adaptive"}),
+        config=Config(
+            retries={"max_attempts": 5, "mode": "adaptive"},
+            # 커넥션 풀을 executor 스레드 수와 맞춘다
+            max_pool_connections=settings.executor_max_workers,
+        ),
     )
 
 

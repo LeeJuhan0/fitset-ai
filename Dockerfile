@@ -18,4 +18,6 @@ EXPOSE 8000
 
 # 부팅 시 routines 전량 로드(수십 초) — ALB 헬스체크는 /health 200 매칭,
 # healthCheckGracePeriod를 충분히(예: 180s) 잡아 로드 중 태스크가 죽지 않게 한다.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --limit-concurrency 35 = executor 스레드(EXECUTOR_MAX_WORKERS, 기본 24) + 대기열 여유.
+# 초과 요청은 즉시 503 → 클라 30s 타임아웃 전에 실패를 알린다. 스레드 수 조정 시 함께 조정.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--limit-concurrency", "35"]

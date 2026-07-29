@@ -6,7 +6,7 @@
 ## 공통
 
 - Base URL: **AI 서버 호스트 + `/v1`** (예: `https://ai.example.com/v1/threads`) — 백엔드는 `api.example.com/v1/...`, AI 서버는 `ai.example.com/v1/...`로 **호스트 분리 + 경로 버저닝 확정** (2026-07-25 협의). 호출 주체는 앱 클라이언트
-- 인증: `Authorization: Bearer {accessToken}` — Gateway/ELB가 JWT 검증 후 `X-User-Id` 주입. 클라가 userId를 보내는 API는 없음 (사칭 방지)
+- 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 SSM 공개키(RS256)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-07-25 확정). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
 - 목록 응답은 `data.items`, `page` 객체 없음 (스레드 최대 5개·메시지 전체 로드라 불필요)
 - LLM 포함 API(루틴 생성, 채팅)는 클라 타임아웃 30s 권장
