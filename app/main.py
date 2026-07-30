@@ -12,11 +12,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from app.chat import router as chat_router
 from app.core.config import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import configure_logging, trace_id_var
+from app.exercises import router as exercises_router
 from app.routines import router as routines_router
-from app.routines.repository import get_routine_store
+from app.routines.repository import get_exercise_meta, get_routine_store
 
 configure_logging()
 logger = logging.getLogger("fitset")
@@ -35,6 +37,8 @@ async def lifespan(app: FastAPI):
     async def load_store() -> None:
         try:
             await asyncio.to_thread(store.load)
+            # 종목 마스터(1.2MB JSON) 선로딩 — 첫 요청이 파싱으로 이벤트 루프를 막지 않게
+            await asyncio.to_thread(get_exercise_meta)
             logger.info("routine store loaded: %d routines", len(store.routines))
         except Exception:
             logger.exception("routine store load failed")
@@ -51,6 +55,30 @@ register_exception_handlers(app)
 TRACE_ID_HEADER = "X-Trace-Id"
 
 
+"""traceId가 한 요청의 로그 전체에 붙는 흐름 — set이 먼저, 로깅은 call_next 안에서.
+
+  요청 도착 (X-Trace-Id: aaa1 또는 새로 발급)
+     │
+     ▼
+  trace_id_var.set("aaa1")            ← 이 요청의 문맥에 ID를 심는다
+     │
+     ▼
+  await call_next(request)            ← 파이프라인 전체 실행. 이 안의 모든 logger 호출은
+     ├─ 라우터    logger.info(...)  →  "... [aaa1] ..."      _TraceIdFilter가 ContextVar를
+     ├─ 서비스    logger.info(...)  →  "... [aaa1] ..."      읽어 로그마다 ID를 붙인다
+     └─ 툴/저장소 logger.warning()  →  "... [aaa1] ..."
+     │
+     ▼
+  trace_id_var.reset(token)           ← 문맥 반납 — 다음 요청에 안 샌다
+     │
+     ▼
+  응답 (본문 traceId + 헤더 X-Trace-Id: aaa1)
+
+동시에 처리 중인 요청 B는 자기 문맥의 "bbb2"를 보므로 로그가 섞여 찍혀도 ID로 구분된다.
+
+같은 값을 request.state와 ContextVar 두 곳에 넣는 이유 — request를 가진 코드(deps·핸들러)는
+state에서, 못 가진 코드(콜스택 깊은 곳의 로깅 필터)는 ContextVar에서 읽는다.
+"""
 @app.middleware("http")
 async def trace_id_middleware(request: Request, call_next) -> Response:
     """요청의 traceId를 정하고 로그 컨텍스트와 응답 헤더에 전파한다."""
@@ -74,3 +102,5 @@ async def health() -> JSONResponse:
 
 
 app.include_router(routines_router.router)
+app.include_router(chat_router.router)
+app.include_router(exercises_router.router)
