@@ -3,8 +3,17 @@
 룰 필터는 CLAUDE.md 확정 규칙(2026-07-25), 무게 추천은 docs/무게 추천.md의
 Epley e1RM 3계층 폴백(실측 → 주동근 유추×0.8 → 성별·체중×레벨×목표)을 구현한다.
 """
+import json
+import re
+
+# 팀 공통 MUSCLE enum — LLM이 파싱한 기피 부위 화이트리스트 검증에 쓴다
+MUSCLES = frozenset({
+    "back", "biceps", "calves", "chest", "core", "forearms",
+    "glutes", "hamstrings", "quadriceps", "shoulders", "trapezius", "triceps",
+})
 
 LEVEL_ORDER = {"beginner": 0, "intermediate": 1, "advanced": 2}
+DEFAULT_GOAL = "hypertrophy"   # 프로필 goal 미입력(null) 시 기본값 — 기본값 처리는 AI 서버 책임(내부 명세 §4.1)
 LEVEL_FACTOR = {"beginner": 1.0, "intermediate": 1.3, "advanced": 1.6}
 GOAL_FACTOR = {"strength": 1.1, "hypertrophy": 1.0, "weightLoss": 0.9, "endurance": 0.9}
 
@@ -49,6 +58,23 @@ def pattern_group(meta: dict) -> str:
 def effective_avoided(avoided: list[str] | None, requested: list[str]) -> set[str]:
     """실효 기피 부위 — 요청 muscleGroups와 겹치는 부위는 클라 요청 우선(기피에서 제외)."""
     return set(avoided or []) - set(requested)
+
+
+def parse_query_analysis(raw: str) -> tuple[str | None, set[str], list[str]]:
+    """쿼리 변환 LLM 응답(JSON) → (묘사문, 기피 부위, 안전 제약). 파싱 실패 시 묘사문 None."""
+    match = re.search(r"\{.*\}", raw, re.DOTALL)   # 코드펜스·군더더기 섞여도 본문만 취한다
+    if match is None:
+        return None, set(), []
+    try:
+        data = json.loads(match.group())
+    except json.JSONDecodeError:
+        return None, set(), []
+    description = data.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return None, set(), []
+    avoid = {m for m in data.get("avoidMuscles") or [] if m in MUSCLES}   # enum 화이트리스트
+    unsafe = [c for c in data.get("unsafeConstraints") or [] if isinstance(c, str) and c.strip()]
+    return description.strip(), avoid, unsafe
 
 
 def passes_filters(
@@ -165,7 +191,7 @@ def recommend_weight(
             male_ratio, female_ratio = PATTERN_RATIO[pattern_group(meta)]
             ratio = female_ratio if gender == "FEMALE" else male_ratio
             level = profile.get("level") or "beginner"
-            goal = profile.get("goal") or "hypertrophy"
+            goal = profile.get("goal") or DEFAULT_GOAL
             e1rm = body_weight * ratio * LEVEL_FACTOR.get(level, 1.0) * GOAL_FACTOR.get(goal, 1.0)
 
     return round_weight(weight_for_reps(e1rm, target_reps), meta.get("equipment", []))

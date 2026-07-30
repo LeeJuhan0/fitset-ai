@@ -5,25 +5,13 @@
 1건만 GetItem으로 가져온다 — 다중 조건 필터를 DynamoDB 쿼리로 하지 않는다.
 """
 import json
-from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
 from app.core.config import get_settings
-from app.core.dynamo import get_routines_table
-
-
-def _plain(value):
-    """boto3 리소스 타입(Decimal 등) → 순수 파이썬 값 재귀 변환."""
-    if isinstance(value, Decimal):
-        return int(value) if value % 1 == 0 else float(value)
-    if isinstance(value, list):
-        return [_plain(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _plain(v) for k, v in value.items()}
-    return value
+from app.core.dynamo import get_routines_table, to_plain
 
 
 def _parse_embedding(raw, dimension: int) -> np.ndarray | None:
@@ -97,7 +85,7 @@ class RoutineStore:
             return None
         item.pop("embedding", None)
         item.pop("embedding_model", None)
-        return _plain(item)
+        return to_plain(item)
 
 
 @lru_cache

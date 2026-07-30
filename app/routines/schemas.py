@@ -8,7 +8,6 @@ from pydantic import Field
 
 from app.core.schemas import CamelModel
 
-Goal = Literal["hypertrophy", "strength", "weightLoss", "endurance"]
 Level = Literal["beginner", "intermediate", "advanced"]
 Muscle = Literal[
     "back", "biceps", "calves", "chest", "core", "forearms",
@@ -17,7 +16,7 @@ Muscle = Literal[
 
 
 class RoutineGenerateRequest(CamelModel):
-    goal: Goal
+    # goal은 요청 필드가 아니다 — 내부 API 프로필 조회값을 쓴다 (2026-07-29 확정, 명세 §1)
     level: Level
     muscle_groups: list[Muscle] = Field(min_length=1, max_length=12)
     minutes: int = Field(ge=10, le=180)
