@@ -4,11 +4,16 @@
 #        (AWS 자격은 ECS 태스크 역할이 주입 — dynamodb:Scan/GetItem, ssm:GetParameter, bedrock:InvokeModel)
 FROM python:3.12-slim
 
+# uv 바이너리만 복사 — uv.lock의 고정 버전 그대로 설치해 로컬과 배포를 일치시킨다
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /srv
 
-# 의존성 레이어 분리 — 코드 변경 시 재설치 방지
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+# 의존성 레이어 분리 — 코드 변경 시 재설치 방지. 프로젝트 자신은 제외(--no-emit-project)해
+# app/ 복사 전에도 설치가 성립한다 (packages=["app"]인 휠 빌드가 여기서 돌면 실패)
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/req.txt \
+ && uv pip install --system --no-cache -r /tmp/req.txt
 
 # 애플리케이션 + 종목 마스터 데이터 (exercise-metadata만 필요)
 COPY app/ app/
