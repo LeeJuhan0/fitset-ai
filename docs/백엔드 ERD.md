@@ -21,7 +21,7 @@ AI 서버는 이 DB에 직접 접근하지 않는다 — [백엔드 내부 API �
 ```dbml
 Project fitset_app_01_04 {
   database_type: 'MySQL'
-  Note: '앱 01~04 요구사항 기반 ERD (id: BINARY(16) / UUIDv7 권장). 진행 중 세션은 active_workout* 계층, 완료 기록은 workout* 계층으로 분리.'
+  Note: '앱 01~04 요구사항 기반 ERD (id: BINARY(16) / UUIDv7 권장). 진행 중 세션은 active_workout* 계층, 완료 기록은 workout* 계층으로 분리. 순서 컬럼은 order_index(0-based)로 통일.'
 }
 
 Enum muscle_role {
@@ -155,7 +155,7 @@ Table routine_exercise {
   routine_exercise_id binary(16) [pk]
   routine_id          binary(16) [not null, ref: > routine.routine_id]
   exercise_id         binary(16) [not null, ref: > exercise.exercise_id]
-  position            int        [not null, note: '루틴 내 운동 순서']
+  order_index         int        [not null, note: '루틴 내 운동 순서(0-based)']
   created_at          datetime   [not null, default: `now()`]
   updated_at          datetime   [not null, note: 'ON UPDATE CURRENT_TIMESTAMP']
 }
@@ -163,7 +163,7 @@ Table routine_exercise {
 Table routine_set {
   routine_set_id      binary(16)   [pk]
   routine_exercise_id binary(16)   [not null, ref: > routine_exercise.routine_exercise_id]
-  set_number          int          [not null, note: '세트 번호 1,2,3...']
+  order_index         int          [not null, note: '세트 순서(0-based)']
   default_weight_kg   decimal(6,2)
   target_reps         int
   created_at          datetime     [not null, default: `now()`]
@@ -187,7 +187,7 @@ Table workout_exercise {
   workout_exercise_id binary(16) [pk]
   workout_id          binary(16) [not null, ref: > workout.workout_id]
   exercise_id         binary(16) [not null, ref: > exercise.exercise_id]
-  position            int        [not null, note: '운동 내 수행 순서']
+  order_index         int        [not null, note: '운동 내 수행 순서(0-based)']
   created_at          datetime   [not null, default: `now()`]
   updated_at          datetime   [not null, note: 'ON UPDATE CURRENT_TIMESTAMP']
 }
@@ -196,7 +196,7 @@ Table workout_set {
   workout_set_id      binary(16)   [pk]
   workout_exercise_id binary(16)   [not null, ref: > workout_exercise.workout_exercise_id]
 
-  set_number          int          [not null, note: '세트 번호 1,2,3...']
+  order_index         int          [not null, note: '세트 순서(0-based)']
 
   duration_sec        int          [not null, default: `0`, note: '세트 수행 시간(초)']
   rest_sec            int          [not null, default: `0`, note: '다음 세트까지 휴식 시간(초)']
@@ -218,7 +218,7 @@ Table body_weight_log {
 }
 ```
 
-## AI 서버 관점 정합성 체크 (2026-07-25)
+## AI 서버 관점 정합성 체크 (2026-07-25 최초 · 2026-07-29 ERD 갱신 반영)
 
 우리 문서(내부 API 명세·document-structure)와 맞춰 본 결과. ✅ = 정합, ⚠️ = 협의·확인 필요.
 
@@ -234,4 +234,7 @@ Table body_weight_log {
 | 8 | `muscle.name` note "가슴·등·어깨·팔·다리·코어 등" | ⚠️ 팀 MUSCLE enum은 12종(팔·다리 없음, 이두근·대퇴사두근 등 세분) — 마스터 시드 시 12종·한글 라벨로 넣는지 확인 필요 |
 | 9 | `routine.is_ai_generated` | ✅ AI 생성 루틴 저장 흐름(클라 → 백엔드 `POST /routines`) 구분 지원 |
 | 10 | `user_profile.workout_goal`·`level` nullable | ✅ 내부 API §4.1의 Null 허용(미입력 시 null, 기본값 처리는 AI 서버 책임)과 정합 |
-| 11 | `body_weight_log` 추이 테이블 | ✅ 내부 API는 **최신 몸무게 1건**만 반환하기로 함 — 백엔드가 최신 레코드를 골라 응답 |
+| 11 | `body_weight_log` 추이 테이블 | ✅ §4.1 프로필은 **최신 1건**만 반환. 추이 전체는 2026-07-29 신설한 내부 API §4.4 `GET /internal/users/{userId}/body-weights`로 조회 — 챗봇 체중 변화 차트용 |
+| 12 | 순서 컬럼 `order_index` 0-based 통일 (2026-07-29 갱신) | ✅ `routine_exercise`·`routine_set`·`workout_exercise`·`workout_set` 4개 테이블이 모두 `order_index`(0-based)로 통일됨. 기존 `position`·`set_number`(1-based) 혼재가 해소되어 **내부 API·클라이언트 API의 `orderIndex`(0-based)와 변환 없이 1:1 대응**한다. 이전 명세의 "세트 번호 1,2,3..." 기준 코드가 있다면 오프셋 제거 필요 |
+| 13 | `workout.active_duration_seconds` | ✅ 순수 운동 시간(휴식·이탈 제외) 원본 보유 — 챗봇 운동 시간 차트를 백엔드 집계 없이 그릴 수 있다. 내부 API §4.6에서 `endedAt − startedAt`(경과)과 함께 그대로 노출 |
+| 14 | `exercise.instructions` json · `video_url` | ✅ 운동 가이드(`responseScheme=exerciseGif`) 응답의 수행 방법·영상 출처. 단 내부 API §4.3 응답에는 아직 두 필드가 없어 **추가 협의 필요** (⚠️ 협의 포인트 ⑪) |

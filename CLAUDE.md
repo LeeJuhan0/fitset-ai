@@ -4,7 +4,7 @@
 
 인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 SSM 공개키로 직접 검증한다.
 저장소는 **DynamoDB 온디맨드**(채팅·유저 요약·루틴, 2026-07-25 확정 — DocumentDB 미사용).
-루틴 파이프라인: S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본, PK=slug) → 부팅 시 Scan 인메모리 로드, 미스 시 GetItem 폴백. 룰 필터 검색은 항상 인메모리.
+루틴 파이프라인: S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본, PK=slug) → 부팅 시 Scan 인메모리 로드, 미스 시 GetItem 폴백. 룰 필터 검색은 항상 인메모리. **인메모리 스토어는 부팅 시점 스냅샷 — 배치가 routines를 갱신해도 재시작·재배포 전까지 반영되지 않는다**(무효화 메커니즘 없음, 2026-07-29 감사 F16).
 
 코드를 읽거나 수정하기 전에 반드시 참고할 것:
 
@@ -55,15 +55,16 @@
 
 **대상**: 클라이언트 API §1 AI 루틴 생성(`POST /v1/routines`) + 백엔드 내부 API 3종(프로필·운동기록·종목) 호출 클라이언트.
 **스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(boto3), SSM.
+**LLM: Amazon Nova 2 Lite(`global.amazon.nova-2-lite-v1:0`, $0.30/$2.50)** — 2026-07-29 비용 절감 확정(Haiku 4.5 대비 입력 1/3.3·출력 1/2). **반드시 global 프로필** — 1세대 Nova는 apac 프로필 강제인데 조직 SCP가 APAC 리전을 차단해 사용 불가(실측), global 라우팅만 SCP를 통과한다. 품질 문제 시 `LLM_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0`으로 즉시 롤백. 챗봇·루틴·제목·요약이 모델 하나를 공유한다(Converse API라 모델 무관 구조).
 **임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 `scripts/embed_routines.py --force` 전량 재계산 필수(임베딩 공간 호환 안 됨).
 호출 주체는 앱 클라이언트. 네트워크 인프라는 Terraform으로 별도 진행(범위 밖).
 
 루틴 생성 요청 처리 플로우:
 
 1. **인증**: `Authorization: Bearer` → SSM 공개키(RS256)로 검증 → `sub` = userId (위 인증 절차 참조)
-2. **유저 컨텍스트**: 내부 API로 프로필(기피부위·수준·목표) + 최근 운동기록 조회 — **6의 쿼리 변환 LLM과 병렬 실행** (변환은 요청 입력만으로 가능하므로 의존성 없음, ~1초 단축)
+2. **유저 컨텍스트**: 내부 API로 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
 3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
-4. **조건 결합**: 요청(goal·level·muscleGroups·minutes·context) 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **내부 API 프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
+4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **내부 API 프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
 5. **후보 생성**: 인메모리 루틴에서 **룰 필터 통과 전체**를 후보로. 메모리는 **라이트 로드**(부팅 시 Scan — 필터 필드·종목명 요약·임베딩만, 실측 ~350MB) — 세트 상세가 담긴 전체 루틴은 **최종 선택된 1건만 GetItem**으로 조회 (2026-07-25 리팩터, 1GB 태스크 가능). 룰 필터 확정 규칙 (2026-07-25):
    - **부위(muscleGroups)**: 요청 부위와 루틴 `muscle_groups`의 **교집합이 있으면 통과** (`∩ ≠ ∅`)
    - **기피 부위(avoidBodyParts)**: 프로필 조회값 — 단 **요청 muscleGroups와 겹치는 부위는 클라 요청 우선**(기피에서 제외). 실효 기피 = `avoidBodyParts − muscleGroups`, 루틴 `muscle_groups`에 실효 기피 부위가 하나라도 포함되면 제외 (`null`/빈 배열이면 미적용)
@@ -75,7 +76,7 @@
 
 **폴백 규칙** (LLM 실패로 503을 내지 않기 위한 단계별 강등):
 
-- 쿼리 변환 LLM 실패 → 요청 필드(goal·muscleGroups·minutes·context)를 **템플릿 문자열로 조립**해 묘사문 대체
+- 쿼리 변환 LLM 실패 → 프로필 goal + 요청 필드(muscleGroups·minutes 등)를 **템플릿 문자열로 조립**해 묘사문 대체
 - 최종 선택 LLM 실패 or 탑5 밖 응답 → **코사인 1위 반환**
 - `503 AI_UNAVAILABLE`은 쿼리 임베딩까지 실패한 경우에만
 
