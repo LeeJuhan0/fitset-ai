@@ -29,9 +29,11 @@ class RecommendRoutine(BaseModel):
     유저가 특정 목적을 말하면 context에 그대로 옮긴다.
     """
 
-    level: Level = Field(description="유저 수준. 언급이 없으면 프로필 대신 intermediate로 둔다")
-    muscle_groups: list[Muscle] = Field(min_length=1, max_length=12, description="타겟 부위")
-    minutes: int = Field(ge=10, le=180, description="목표 운동 시간(분)")
+    # 세 필수 인자는 추측 금지 — 대화에서 알 수 없으면 시스템 프롬프트 규칙에 따라
+    # 호출 전에 모르는 항목을 질문 하나로 모아 되묻는다 (직렬 3회 왕복 방지)
+    level: Level = Field(description="유저 수준. 대화에서 파악한 값만 쓴다")
+    muscle_groups: list[Muscle] = Field(min_length=1, max_length=12, description="타겟 부위. 대화에서 파악한 값만 쓴다")
+    minutes: int = Field(ge=10, le=180, description="목표 운동 시간(분). 대화에서 파악한 값만 쓴다")
     context: str | None = Field(
         default=None, max_length=200,
         description="통증·기피·선호·목표 등 자유 서술. 유저가 말한 제약을 그대로 옮긴다",
