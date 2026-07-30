@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FitSet 챗봇 로컬 실험</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #1a2027; --bubble-user: #2f6fed; --bubble-bot: #232b34;
+    --text: #e8edf2; --muted: #8a97a5; --accent: #4c8dff; --border: #2a333d;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif;
+         display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; }
+  header h1 { font-size: 15px; font-weight: 600; }
+  header .status { color: var(--muted); font-size: 12px; flex: 1; }
+  header button { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  header button:hover { border-color: var(--accent); }
+  #log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 72%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; }
+  .user { align-self: flex-end; background: var(--bubble-user); border-bottom-right-radius: 4px; }
+  .bot  { align-self: flex-start; background: var(--bubble-bot); border-bottom-left-radius: 4px; }
+  .err  { align-self: center; background: #3a2026; color: #ff9b9b; font-size: 13px; border-radius: 8px; }
+  .meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .card { align-self: flex-start; max-width: 72%; background: var(--panel); border: 1px solid var(--border);
+          border-radius: 14px; padding: 14px; }
+  .card h3 { font-size: 14px; margin-bottom: 8px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .exercise { display: flex; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .exercise .sets { color: var(--muted); }
+  svg text { fill: var(--muted); font-size: 10px; }
+  a { color: var(--accent); }
+  footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  #input { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+           color: var(--text); padding: 12px 14px; font-size: 15px; outline: none; }
+  #input:focus { border-color: var(--accent); }
+  #send { background: var(--accent); color: #fff; border: 0; border-radius: 10px; padding: 0 20px;
+          font-size: 15px; cursor: pointer; }
+  #send:disabled { opacity: .4; cursor: default; }
+  .typing { color: var(--muted); font-size: 13px; align-self: flex-start; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FitSet 챗봇 실험</h1>
+  <span class="status" id="status">스레드 준비 중…</span>
+  <button id="newThread">새 스레드</button>
+</header>
+<div id="log"></div>
+<footer>
+  <input id="input" placeholder="예: 내 체중 변화 보여줘 / 가슴 루틴 짜줘 / 벤치프레스 자세 알려줘" autocomplete="off">
+  <button id="send">전송</button>
+</footer>
+
+<script>
+const log = document.getElementById("log");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+const statusEl = document.getElementById("status");
+let threadId = null;
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+function scroll() { log.scrollTop = log.scrollHeight; }
+
+// ── payload 렌더러 ──────────────────────────────────────────────
+
+function renderChart(p) {
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, p.title));
+  card.appendChild(el("div", "sub", `${p.xLabel} · ${p.yLabel}`));
+  const W = 360, H = 170, pad = { l: 8, r: 8, t: 10, b: 22 };
+  const values = p.series[0].values, name = p.series[0].name;
+  const min = Math.min(...values), max = Math.max(...values);
+  const span = (max - min) || 1;
+  const x = i => pad.l + i * (W - pad.l - pad.r) / Math.max(values.length - 1, 1);
+  const y = v => pad.t + (1 - (v - min) / span) * (H - pad.t - pad.b);
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+
+  if (p.chartType === "bar") {
+    const bw = (W - pad.l - pad.r) / values.length * 0.6;
+    values.forEach((v, i) => {
+      const rect = document.createElementNS(svgNS, "rect");
+      const cx = pad.l + (i + 0.5) * (W - pad.l - pad.r) / values.length;
+      rect.setAttribute("x", cx - bw / 2); rect.setAttribute("y", y(Math.max(v, min)));
+      rect.setAttribute("width", bw); rect.setAttribute("height", Math.max(H - pad.b - y(v), 1));
+      rect.setAttribute("fill", "#4c8dff"); rect.setAttribute("rx", 3);
+      svg.appendChild(rect);
+    });
+  } else {
+    const line = document.createElementNS(svgNS, "polyline");
+    line.setAttribute("points", values.map((v, i) => `${x(i)},${y(v)}`).join(" "));
+    line.setAttribute("fill", "none"); line.setAttribute("stroke", "#4c8dff"); line.setAttribute("stroke-width", 2);
+    svg.appendChild(line);
+    values.forEach((v, i) => {
+      const dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("r", 3);
+      dot.setAttribute("fill", "#4c8dff");
+      svg.appendChild(dot);
+    });
+  }
+  // x축 라벨은 겹치지 않게 최대 6개만
+  const step = Math.ceil(p.x.length / 6);
+  p.x.forEach((label, i) => {
+    if (i % step !== 0 && i !== p.x.length - 1) return;
+    const t = document.createElementNS(svgNS, "text");
+    const cx = p.chartType === "bar" ? pad.l + (i + 0.5) * (W - pad.l - pad.r) / values.length : x(i);
+    t.setAttribute("x", cx); t.setAttribute("y", H - 6); t.setAttribute("text-anchor", "middle");
+    t.textContent = label;
+    svg.appendChild(t);
+  });
+  card.appendChild(svg);
+  card.appendChild(el("div", "meta", `${name}: ${values[0]} → ${values[values.length - 1]}`));
+  return card;
+}
+
+function renderRoutine(p) {
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, `🏋️ ${p.name}`));
+  card.appendChild(el("div", "sub", `약 ${p.estimatedMinutes}분 · ${p.exercises.length}종목`));
+  p.exercises.forEach(ex => {
+    const row = el("div", "exercise");
+    row.appendChild(el("span", null, ex.exerciseName));
+    const summary = ex.sets.map(s => s.weight != null ? `${s.weight}kg×${s.reps}` : `×${s.reps}`);
+    row.appendChild(el("span", "sets", `${ex.sets.length}세트 (${summary[0]})`));
+    card.appendChild(row);
+  });
+  return card;
+}
+
+function renderGuide(p) {
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, `📋 ${p.exerciseName}`));
+  if (p.videoUrl) {
+    const link = el("div", "sub");
+    const a = el("a", null, "가이드 영상 (presigned URL)");
+    a.href = p.videoUrl; a.target = "_blank";
+    link.appendChild(a);
+    card.appendChild(link);
+    card.appendChild(el("div", "meta", `만료: ${p.expiresAt}`));
+  } else {
+    card.appendChild(el("div", "sub", "가이드 영상 미등록"));
+  }
+  return card;
+}
+
+function renderMessage(msg) {
+  if (msg.content) log.appendChild(el("div", `msg ${msg.role === "user" ? "user" : "bot"}`, msg.content));
+  if (msg.role === "assistant" && msg.payload) {
+    if (msg.responseScheme === "chart") log.appendChild(renderChart(msg.payload));
+    else if (msg.responseScheme === "routine") log.appendChild(renderRoutine(msg.payload));
+    else if (msg.responseScheme === "exerciseGif") log.appendChild(renderGuide(msg.payload));
+  }
+  scroll();
+}
+
+// ── API ────────────────────────────────────────────────────────
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer dev" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const json = await res.json();
+  if (!res.ok) throw new Error(`${json.error?.code || res.status}: ${json.error?.message || ""}`);
+  return json.data;
+}
+
+async function newThread() {
+  log.replaceChildren();
+  const data = await api("POST", "/v1/threads");
+  threadId = data.threadId;
+  statusEl.textContent = `스레드 ${threadId.slice(0, 10)}… · 유저기록: 가짜 데이터(벤치·스쿼트 4주치)`;
+  log.appendChild(el("div", "typing", "새 스레드가 열렸어요. 무엇이든 물어보세요."));
+}
+
+async function send() {
+  const content = input.value.trim();
+  if (!content || !threadId) return;
+  input.value = "";
+  sendBtn.disabled = true; input.disabled = true;
+  renderMessage({ role: "user", content });
+  const typing = el("div", "typing", "생각 중…");
+  log.appendChild(typing); scroll();
+  try {
+    const data = await api("POST", `/v1/threads/${threadId}/messages`, { content });
+    typing.remove();
+    renderMessage(data.message);
+    if (data.threadTitle) statusEl.textContent = `"${data.threadTitle}"`;
+  } catch (err) {
+    typing.remove();
+    log.appendChild(el("div", "msg err", err.message)); scroll();
+  } finally {
+    sendBtn.disabled = false; input.disabled = false; input.focus();
+  }
+}
+
+sendBtn.addEventListener("click", send);
+input.addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+document.getElementById("newThread").addEventListener("click", newThread);
+newThread().catch(err => log.appendChild(el("div", "msg err", err.message)));
+</script>
+</body>
+</html>
