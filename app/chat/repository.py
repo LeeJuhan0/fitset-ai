@@ -197,6 +197,7 @@ def count_unsummarized(thread_id: str, summary_upto: str | None) -> int:
         total += response.get("Count", 0)
         if "LastEvaluatedKey" not in response:
             return total
+        # DynamoDB 1MB 스캔 상한에 잘리면 오는 책갈피 — 이 키 다음부터 이어읽는다
         kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 

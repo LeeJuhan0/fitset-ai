@@ -15,6 +15,39 @@ from contextvars import ContextVar
 """
 trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
 
+"""실패가 로그로 저장되기까지 — 예: 채팅 중 Bedrock 호출이 죽었을 때 (service._run_agent)
+
+  except Exception as exc:
+      logger.exception("agent turn failed")        ← 우리 코드는 이 한 줄
+          │
+          ▼
+  ① LogRecord 생성  { name:"fitset", level:ERROR, msg:"agent turn failed",
+                      exc_info:(지금 예외의 타입·값·트레이스백) }
+          │
+          ▼
+  ② _TraceIdFilter 통과
+     record.trace_id ← trace_id_var.get()          ← 이 요청의 ID가 자동으로 붙는 지점
+          │
+          ▼
+  ③ 포맷 적용  "%(asctime)s %(levelname)s %(name)s [%(trace_id)s] %(message)s"
+     + exc_info가 있으면 트레이스백을 그 아래에 이어 붙임
+          │
+          ▼
+  ④ stdout으로 출력 ──► 로컬: 터미널 / ECS: awslogs 드라이버 → CloudWatch Logs
+
+실제 저장되는 모양:
+  2026-07-29 13:51:58,713 ERROR fitset [4a31f1fc...] agent turn failed
+  Traceback (most recent call last):
+    File ".../app/chat/service.py", line 236, in _run_agent
+      return await graph.run_turn(user_id, system_prompt, history)
+    ...
+  botocore.errorfactory.AccessDeniedException: An error occurred ...
+
+레벨 규칙: logger.exception = ERROR+트레이스백(except 안에서만) /
+warning(exc_info=True) = 폴백으로 응답은 살아남는 실패 / info = 정상 흐름 기록.
+파일 저장 코드가 없는 건 의도 — stdout까지가 우리 책임, 수집·보관은 실행 환경 몫.
+"""
+
 
 class _TraceIdFilter(logging.Filter):
     """모든 로그 레코드에 trace_id 속성을 붙인다."""

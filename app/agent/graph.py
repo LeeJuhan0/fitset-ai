@@ -104,6 +104,37 @@ def _route(state: ChatState) -> str:
     return END
 
 
+"""ainvoke 1회의 실제 순회 — 예: "벤치프레스 기록 차트로 보여줘"
+
+  START
+    │  (START→agent 엣지: 무조건 이동 — 결정 없음)
+    ▼
+ ┌─ agent 노드 ───────────────────────────────────────────────┐
+ │  Bedrock 호출 (bind_tools로 툴 3종 스키마가 딸려 감)          │
+ │  ★ 어떤 툴을 쓸지는 여기서 LLM이 결정 ★                      │
+ │  응답 = AIMessage(tool_calls=[{name:"DrawChart",            │
+ │           args:{metric:"exercisePr", exercise:"..."}}])     │
+ └──────────┬─────────────────────────────────────────────────┘
+            ▼
+   _route: 마지막 메시지에 tool_calls 있나? + 왕복 상한 안인가?
+            ├─ 없음/상한 도달 ──► END
+            └─ 있음 ▼
+ ┌─ tools 노드 ───────────────────────────────────────────────┐
+ │  결정 없음 — LLM이 시킨 이름을 dispatch로 찾아 실행만 한다     │
+ │    ToolMessage(요약 텍스트)      → messages에 추가            │
+ │    {scheme, payload}            → artifacts에 추가           │
+ │  tool_turns += 1                                            │
+ └──────────┬─────────────────────────────────────────────────┘
+            │  (tools→agent 엣지: 무조건 복귀)
+            ▼
+ agent 노드 2회차: 툴 결과를 본 LLM이 답변 작성 (tool_calls 없음)
+            ▼
+   _route → END → 최종 state 반환
+   → run_turn이 마지막 AI 텍스트 + artifacts[-1]를 guardrails 검증 후 AgentResult로
+
+툴 선택 주체는 엣지도 tools 노드도 아닌 agent 노드 안의 LLM이다 — 엣지는
+"툴콜 유무" 분기만, tools 노드는 시킨 이름의 실행만 담당한다.
+"""
 @lru_cache
 def _graph():
     """컴파일된 그래프 — 상태가 없어 프로세스 전역으로 재사용한다."""
@@ -132,10 +163,10 @@ def _text_of(message: AnyMessage) -> str:
 async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) -> AgentResult:
     """대화 1턴 실행. history 마지막이 이번 유저 발화다."""
     state = await _graph().ainvoke({
-        "messages": [SystemMessage(content=system_prompt), *history],
-        "user_id": user_id,
-        "artifacts": [],
-        "tool_turns": 0,
+        "messages": [SystemMessage(content=system_prompt), *history],  # 시스템(규칙+요약) + 최근 6턴 + 이번 발화
+        "user_id": user_id,     # 툴 실행용 — LLM 인자가 아니라 state 주입 (사칭 방지)
+        "artifacts": [],        # 툴이 만든 payload 채널 — LLM 텍스트와 분리해 오염 차단
+        "tool_turns": 0,        # 툴콜 왕복 카운터 — 상한 도달 시 루프 강제 종료
     })
 
     content = ""
