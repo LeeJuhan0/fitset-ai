@@ -17,6 +17,8 @@ def get_current_user_id(request: Request) -> str:
     """Authorization Bearer JWT를 검증하고 userId(sub)를 돌려준다 — 비즈니스 규칙 §9.
 
     검증 실패는 UnauthorizedError → main.py DomainError 핸들러가 401 {traceId, error}로 번역.
+    라우터 공통 dependencies와 파라미터에 중복 선언돼도 FastAPI가 요청당 1회만 실행하고
+    결과를 캐시해 재사용한다 — 파라미터 user_id는 그 캐시값 주입.
     """
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):

@@ -32,7 +32,51 @@ class NoRoutineCandidateError(DomainError):
     default_message = "조건을 만족하는 루틴을 구성할 수 없습니다."
 
 
+class UnsafeConstraintError(DomainError):
+    status_code = 409
+    code = "UNSAFE_CONSTRAINT"
+    default_message = "안전하게 추천할 수 있는 루틴이 없습니다. 전문가와 상담해주세요."
+
+
 class AiUnavailableError(DomainError):
     status_code = 503
     code = "AI_UNAVAILABLE"
     default_message = "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
+
+
+class ThreadNotFoundError(DomainError):
+    status_code = 404
+    code = "THREAD_NOT_FOUND"
+    default_message = "대화 스레드를 찾을 수 없습니다."
+
+
+class ThreadForbiddenError(DomainError):
+    # 현 chat_threads PK가 (user_id, thread_id)라 남의 스레드는 조회 자체가 비어 404가 된다.
+    # 계약(클라이언트 API 명세 §4)에는 남아있어 예약해 두되, 실제 발생 경로는 없다
+    status_code = 403
+    code = "THREAD_FORBIDDEN"
+    default_message = "접근할 수 없는 대화 스레드입니다."
+
+
+class RateLimitedError(DomainError):
+    status_code = 429
+    code = "RATE_LIMITED"
+    default_message = "요청이 너무 잦습니다. 잠시 후 다시 시도해주세요."
+
+
+class ThreadFullError(DomainError):
+    status_code = 409
+    code = "THREAD_FULL"
+    default_message = "대화가 너무 길어 더 보낼 수 없습니다. 새 스레드에서 계속해주세요."
+
+
+class ExerciseNotFoundError(DomainError):
+    status_code = 404
+    code = "EXERCISE_NOT_FOUND"
+    default_message = "운동 종목을 찾을 수 없습니다."
+
+
+class VideoNotFoundError(DomainError):
+    status_code = 404
+    code = "VIDEO_NOT_FOUND"
+    default_message = "가이드 영상이 등록되지 않은 종목입니다."

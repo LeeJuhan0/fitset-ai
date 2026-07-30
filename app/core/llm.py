@@ -19,8 +19,33 @@ def _runtime():
         "bedrock-runtime",
         region_name=settings.aws_region,
         config=Config(
-            retries={"max_attempts": 5, "mode": "adaptive"},
+            retries={"max_attempts": settings.bedrock_max_attempts, "mode": "adaptive"},
+            # 호출 1회의 스레드 점유 상한 — 기본값(read 60s × 5회)이면 클라가 끊은 뒤에도 스레드가 물린다
+            connect_timeout=settings.bedrock_connect_timeout,
+            read_timeout=settings.bedrock_read_timeout,
             # 커넥션 풀을 executor 스레드 수와 맞춘다
+            max_pool_connections=settings.executor_max_workers,
+        ),
+    )
+
+
+@lru_cache
+def chat_runtime():
+    """채팅 에이전트용 bedrock-runtime 클라이언트 — LangGraph ChatBedrockConverse에 주입한다.
+
+    주입하지 않으면 langchain이 기본 설정(read 60s, 재시도 다수)으로 자체 클라이언트를
+    만들어 이 모듈의 타임아웃 규약이 통째로 빠진다 — 클라가 30s에 포기한 요청을
+    서버가 수 분간 계속 굴리게 된다(감사 F15). 채팅 턴은 툴콜 왕복이 있어
+    루틴 경로(8s)보다 여유 있는 read 상한을 따로 쓴다.
+    """
+    settings = get_settings()
+    return boto3.client(
+        "bedrock-runtime",
+        region_name=settings.aws_region,
+        config=Config(
+            retries={"max_attempts": settings.bedrock_max_attempts, "mode": "adaptive"},
+            connect_timeout=settings.bedrock_connect_timeout,
+            read_timeout=settings.bedrock_chat_read_timeout,
             max_pool_connections=settings.executor_max_workers,
         ),
     )

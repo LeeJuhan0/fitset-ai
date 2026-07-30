@@ -39,6 +39,13 @@ class ListData(CamelModel, Generic[T]):
     page: Page = Field(default_factory=Page)
 
 
+class ItemsData(CamelModel, Generic[T]):
+    # page 없는 목록 응답의 data 부분: {items}. 커서를 쓰지 않는 엔드포인트 전용.
+    # 채팅 API(클라이언트 API 명세 §공통)는 스레드 최대 5개·메시지 전체 로드라 page 객체를
+    # 아예 내보내지 않기로 확정 — ListData를 쓰면 기본값 page가 딸려 나가 계약과 어긋난다.
+    items: list[T]
+
+
 class ErrorDetail(CamelModel):
     # 필드 단위 검증 오류(규약 §3.4). value는 클라가 보낸 원본 값이라 어떤 JSON 타입이든 올 수 있다.
     field: str
