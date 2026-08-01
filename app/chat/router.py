@@ -19,7 +19,7 @@ from app.core.schemas import ApiResponse, ItemsData
 
 # 라우터의 모든 엔드포인트에 액세스 토큰 인증을 강제한다
 router = APIRouter(
-    prefix="/v1",
+    prefix="/ai/v1",
     tags=["chat"],
     dependencies=[Depends(deps.get_current_user_id)],
 )

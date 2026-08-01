@@ -1,4 +1,4 @@
-"""루틴 추천 툴 — 기존 루틴 워크로드(POST /v1/routines)를 그대로 재사용한다.
+"""루틴 추천 툴 — 기존 루틴 워크로드(POST /ai/v1/routines)를 그대로 재사용한다.
 
 챗봇이 루틴을 새로 구성하지 않는다. routines.service.generate_routine을 호출해
 룰 필터 → 임베딩 랭킹 → LLM 최종 선택 파이프라인을 타므로, 홈 화면 생성 결과와

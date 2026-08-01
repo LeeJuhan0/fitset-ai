@@ -124,7 +124,7 @@ def _answer(content="좋아요", scheme="text", payload=None):
 
 
 def test_create_thread_returns_201_with_envelope(client):
-    response = client.post("/v1/threads")
+    response = client.post("/ai/v1/threads")
     assert response.status_code == 201
     body = response.json()
     assert set(body) == {"traceId", "data"}
@@ -133,8 +133,8 @@ def test_create_thread_returns_201_with_envelope(client):
 
 
 def test_thread_list_has_no_page_object(client):
-    client.post("/v1/threads")
-    body = client.get("/v1/threads").json()
+    client.post("/ai/v1/threads")
+    body = client.get("/ai/v1/threads").json()
     # 클라이언트 API 명세 §공통 — 커서를 안 쓰므로 page를 내보내지 않는다
     assert set(body["data"]) == {"items"}
     assert body["data"]["items"][0]["title"] is None
@@ -142,8 +142,8 @@ def test_thread_list_has_no_page_object(client):
 
 
 def test_thread_quota_evicts_least_recently_active(client, store):
-    created = [client.post("/v1/threads").json()["data"]["threadId"] for _ in range(6)]
-    remaining = {item["threadId"] for item in client.get("/v1/threads").json()["data"]["items"]}
+    created = [client.post("/ai/v1/threads").json()["data"]["threadId"] for _ in range(6)]
+    remaining = {item["threadId"] for item in client.get("/ai/v1/threads").json()["data"]["items"]}
     assert len(remaining) == 5
     # 가장 먼저 만들어 활동이 없는 스레드가 밀려난다
     assert created[0] not in remaining
@@ -151,10 +151,10 @@ def test_thread_quota_evicts_least_recently_active(client, store):
 
 def test_send_message_persists_pair_and_returns_title(client, monkeypatch, store):
     monkeypatch.setattr(graph, "run_turn", _answer("가슴 위주로 짜봤어요"))
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
 
     response = client.post(
-        f"/v1/threads/{thread_id}/messages", json={"content": "가슴 루틴 추천해줘"}
+        f"/ai/v1/threads/{thread_id}/messages", json={"content": "가슴 루틴 추천해줘"}
     )
     assert response.status_code == 200
     data = response.json()["data"]
@@ -171,10 +171,10 @@ def test_message_list_marks_user_payload_null(client, monkeypatch):
              "xLabel": "날짜", "yLabel": "체중(kg)", "x": ["7/1"],
              "series": [{"name": "체중", "values": [72.4]}]}
     monkeypatch.setattr(graph, "run_turn", _answer("줄고 있어요", "chart", chart))
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
-    client.post(f"/v1/threads/{thread_id}/messages", json={"content": "체중 어때?"})
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "체중 어때?"})
 
-    items = client.get(f"/v1/threads/{thread_id}/messages").json()["data"]["items"]
+    items = client.get(f"/ai/v1/threads/{thread_id}/messages").json()["data"]["items"]
     assert [item["role"] for item in items] == ["user", "assistant"]
     assert items[0]["responseScheme"] is None and items[0]["payload"] is None
     assert items[1]["responseScheme"] == "chart"
@@ -183,27 +183,27 @@ def test_message_list_marks_user_payload_null(client, monkeypatch):
 
 def test_delete_thread_removes_messages_and_returns_204(client, monkeypatch, store):
     monkeypatch.setattr(graph, "run_turn", _answer())
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
-    client.post(f"/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
 
-    response = client.delete(f"/v1/threads/{thread_id}")
+    response = client.delete(f"/ai/v1/threads/{thread_id}")
     assert response.status_code == 204
     assert response.content == b""
     assert response.headers["X-Trace-Id"]
     assert store.messages.get(thread_id) is None
     # 재삭제는 404 — 현 계약은 비멱등 (§9 협의 포인트 8)
-    assert client.delete(f"/v1/threads/{thread_id}").status_code == 404
+    assert client.delete(f"/ai/v1/threads/{thread_id}").status_code == 404
 
 
 def test_unknown_thread_returns_thread_not_found(client):
-    response = client.get("/v1/threads/01JUNKNOWN0000000000000000/messages")
+    response = client.get("/ai/v1/threads/01JUNKNOWN0000000000000000/messages")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "THREAD_NOT_FOUND"
 
 
 def test_message_length_is_validated(client):
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
-    response = client.post(f"/v1/threads/{thread_id}/messages", json={"content": ""})
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": ""})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
@@ -221,7 +221,7 @@ def test_thread_list_caps_at_quota_even_after_race(client, store):
     # F2 read-repair ① — TOCTOU 경쟁으로 6개 이상 생겨도 목록은 계약(최대 5)을 지킨다
     for index in range(7):
         _seed_thread(store, f"01T{index}")
-    items = client.get("/v1/threads").json()["data"]["items"]
+    items = client.get("/ai/v1/threads").json()["data"]["items"]
     assert len(items) == 5
 
 
@@ -229,25 +229,25 @@ def test_create_thread_repairs_overflow_from_race(client, store):
     # F2 read-repair ② — 초과 상태에서 생성하면 정원까지 되돌린다 (LRU 일괄 정리)
     for index in range(6):
         _seed_thread(store, f"01T{index}")
-    client.post("/v1/threads")
+    client.post("/ai/v1/threads")
     assert len(store.threads) == 5
 
 
 def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, store):
     # F6 — 미요약이 임계 미달이면 COUNT만 하고 파티션 전체(list_messages)를 읽지 않는다
     monkeypatch.setattr(graph, "run_turn", _answer())
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.list_messages_calls = 0
-    client.post(f"/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+    client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
     assert store.list_messages_calls == 0
 
 
 def test_message_rate_limit_returns_429(client, monkeypatch):
     # F17 — 유저별 분당 상한(기본 10) 초과 시 RATE_LIMITED, LLM 경로 진입 전 차단
     monkeypatch.setattr(graph, "run_turn", _answer())
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     responses = [
-        client.post(f"/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+        client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
         for _ in range(11)
     ]
     assert [r.status_code for r in responses[:10]] == [200] * 10
@@ -258,14 +258,14 @@ def test_message_rate_limit_returns_429(client, monkeypatch):
 def test_thread_full_returns_409(client, monkeypatch, store):
     # F14 — 스레드당 메시지 상한(기본 100) 도달 시 THREAD_FULL, 새 스레드 유도
     monkeypatch.setattr(graph, "run_turn", _answer())
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.messages[thread_id] = [
         {"thread_id": thread_id, "message_id": f"M{index:04d}", "user_id": USER_ID,
          "role": "user", "content": "x", "response_scheme": None, "payload": None,
          "created_at": "2026-07-29T00:00:00Z"}
         for index in range(100)
     ]
-    response = client.post(f"/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+    response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "THREAD_FULL"
 
@@ -305,7 +305,7 @@ def test_agent_failure_maps_to_ai_unavailable(client, monkeypatch):
         raise RuntimeError("bedrock down")
 
     monkeypatch.setattr(graph, "run_turn", boom)
-    thread_id = client.post("/v1/threads").json()["data"]["threadId"]
-    response = client.post(f"/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "AI_UNAVAILABLE"

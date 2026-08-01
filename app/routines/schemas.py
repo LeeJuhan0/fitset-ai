@@ -1,4 +1,4 @@
-"""루틴 도메인 요청/응답 모델 — 클라이언트 API 명세 §1 (POST /v1/routines).
+"""루틴 도메인 요청/응답 모델 — 클라이언트 API 명세 §1 (POST /ai/v1/routines).
 
 내부 snake_case ↔ 와이어 camelCase는 CamelModel alias가 처리한다. 로직·I/O 금지.
 """

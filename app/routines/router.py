@@ -8,7 +8,7 @@ from app.routines.schemas import RoutineData, RoutineGenerateRequest
 
 # 라우터의 모든 엔드포인트에 액세스 토큰 인증을 강제한다
 router = APIRouter(
-    prefix="/v1",
+    prefix="/ai/v1",
     tags=["routines"],
     dependencies=[Depends(deps.get_current_user_id)],
 )

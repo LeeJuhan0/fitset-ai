@@ -8,7 +8,7 @@ from app.exercises.schemas import ExerciseVideoOut
 
 # 스레드와 무관한 종목 단위 조회지만 액세스 토큰 인증은 동일하게 요구한다 (§6-B)
 router = APIRouter(
-    prefix="/v1",
+    prefix="/ai/v1",
     tags=["exercises"],
     dependencies=[Depends(deps.get_current_user_id)],
 )
