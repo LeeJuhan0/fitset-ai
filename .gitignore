@@ -8,6 +8,7 @@ venv/
 # env / secrets
 .env
 .env.*
+!.env.example
 
 # tooling
 .pytest_cache/
@@ -29,4 +30,8 @@ docs/FastAPI 의존성 주입.md
 docs/Pydantic 스키마.md
 docs/기술문서.md
 docs/인프라와 유저 인증.md
+docs/환경 설정.md
+docs/ECS 실습 적용 가이드.md
+docs/서버 동시성과 실행 모델.md
+docs/async 서버 타임라인.md
 docs/images/
