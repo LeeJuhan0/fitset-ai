@@ -49,7 +49,13 @@ async def lifespan(app: FastAPI):
     executor.shutdown(wait=False, cancel_futures=True)
 
 
-app = FastAPI(title="FitSet AI Server", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="FitSet AI Server",
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/ai/docs",
+    openapi_url="/ai/openapi.json",
+)
 register_exception_handlers(app)
 
 TRACE_ID_HEADER = "X-Trace-Id"
@@ -93,6 +99,7 @@ async def trace_id_middleware(request: Request, call_next) -> Response:
 
 
 @app.get("/health", include_in_schema=False)
+@app.get("/ai/v1/health", include_in_schema=False)
 async def health() -> JSONResponse:
     """루틴 스토어 로드 완료 여부로 헬스체크에 응답한다."""
     store = get_routine_store()
