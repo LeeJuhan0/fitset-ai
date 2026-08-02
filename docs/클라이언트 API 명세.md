@@ -5,7 +5,7 @@
 
 ## 공통
 
-- Base URL: **AI 서버 호스트 + `/v1`** (예: `https://ai.example.com/v1/threads`) — 백엔드는 `api.example.com/v1/...`, AI 서버는 `ai.example.com/v1/...`로 **호스트 분리 + 경로 버저닝 확정** (2026-07-25 협의). 호출 주체는 앱 클라이언트
+- Base URL: `https://api.fitset.kro.kr/ai/v1` (예: `https://api.fitset.kro.kr/ai/v1/threads`) — 단일 호스트 `api.fitset.kro.kr`에서 ALB 리스너 규칙이 Host 헤더 `api.fitset.kro.kr` + 경로 `/ai/*`를 AI 서버 대상 그룹으로 라우팅하고, 코드가 `/ai/v1` 프리픽스로 버저닝한다 (2026-08-02 전환, 기존 호스트 분리안 폐기). 나머지 경로는 백엔드로 간다. 호출 주체는 앱 클라이언트
 - 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 SSM 공개키(RS256)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-07-25 확정). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
 - 목록 응답은 `data.items`, `page` 객체 없음 (스레드 최대 5개·메시지 전체 로드라 불필요)
@@ -16,15 +16,15 @@
 
 | Method | Path | 설명 | 성공 |
 | --- | --- | --- | --- |
-| POST | `/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
-| GET | `/v1/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
-| POST | `/v1/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
-| DELETE | `/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
-| GET | `/v1/threads/{threadId}/messages` | 대화 전체 시간순 조회 (payload 포함) | 200 |
-| POST | `/v1/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
-| GET | `/v1/exercises/{slug}/video` | 운동 가이드 영상 presigned URL 재발급 | 200 |
+| POST | `/ai/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
+| GET | `/ai/v1/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
+| POST | `/ai/v1/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
+| DELETE | `/ai/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
+| GET | `/ai/v1/threads/{threadId}/messages` | 대화 전체 시간순 조회 (payload 포함) | 200 |
+| POST | `/ai/v1/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
+| GET | `/ai/v1/exercises/{slug}/video` | 운동 가이드 영상 presigned URL 재발급 | 200 |
 
-## 1. POST /v1/routines
+## 1. POST /ai/v1/routines
 
 홈 "AI 루틴 생성" 화면 입력값만 받는다. 신체 정보·**운동 목적(goal)**·기록은 서버가 내부 API(08)로 조회 — **goal은 요청에서 제거, 프로필 조회값 사용 (2026-07-29 확정)**. 대화 스레드를 생성하지 않는다.
 
@@ -69,7 +69,7 @@
 
 오류: 400 `INVALID_REQUEST` / 401 / 404 `USER_NOT_FOUND` / 409 `NO_ROUTINE_CANDIDATE` / 429 `RATE_LIMITED` (유저별 분당 상한, 2026-07-29) / 503 `AI_UNAVAILABLE`
 
-## 2. GET /v1/threads
+## 2. GET /ai/v1/threads
 
 ```json
 { "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z" } ] }
@@ -77,13 +77,13 @@
 
 - `title`: 첫 발화 기반 자동 생성, 첫 메시지 전이면 `null`. `lastMessageAt`: 빈 스레드면 `null`
 
-## 3. POST /v1/threads
+## 3. POST /ai/v1/threads
 
 본문 없음 → `201` `{ "threadId": "oid", "createdAt": "..." }`
 
 - 유저당 활성 스레드 최대 5개, 초과 시 마지막 활동이 가장 오래된 스레드 삭제 후 생성 (협의 포인트 ③: 409 반환 대안 논의 중)
 
-## 4. DELETE /v1/threads/{threadId}
+## 4. DELETE /ai/v1/threads/{threadId}
 
 스레드 1건과 **소속 메시지 전체**를 삭제한다. 복구 불가 — 클라는 삭제 전 확인 다이얼로그 필수.
 
@@ -91,7 +91,7 @@ Path Parameter:
 
 | 이름 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `threadId` | String (ULID) | Y | 삭제 대상 스레드 — `GET /v1/threads`의 `threadId` |
+| `threadId` | String (ULID) | Y | 삭제 대상 스레드 — `GET /ai/v1/threads`의 `threadId` |
 
 요청 본문 없음.
 
@@ -115,7 +115,7 @@ Path Parameter:
 - `403`은 `chat_threads` PK가 `(user_id, thread_id)` 복합키라 **남의 스레드 조회 결과가 "부재"와 구분되지 않는다** — 타 유저 threadId를 넣어도 GetItem이 비어 404가 된다. 존재 여부 노출 방지 측면에선 404가 오히려 안전하므로, 403은 계약상 예약만 하고 실제로는 내보내지 않는다 (§9 협의 포인트 ⑨)
 - 재시도 시 두 번째 호출이 404가 되는 점(비멱등)도 §9 협의 포인트 ⑨
 
-## 5. GET /v1/threads/{threadId}/messages
+## 5. GET /ai/v1/threads/{threadId}/messages
 
 ```json
 {
@@ -129,7 +129,7 @@ Path Parameter:
 - user 메시지는 `responseScheme`·`payload` 모두 `null`
 - 오류: 401 / 403 / 404 (스레드 없음·만료)
 
-## 6. POST /v1/threads/{threadId}/messages
+## 6. POST /ai/v1/threads/{threadId}/messages
 
 요청: `{ "content": "이 루틴에서 스쿼트 빼줘" }` (1~1000자)
 
@@ -147,7 +147,7 @@ Path Parameter:
 
 오류: 400(길이) / 401 / 403 / 404(→ 클라는 새 스레드 생성 유도) / 409 `THREAD_FULL`(스레드당 메시지 상한 도달 → 새 스레드 생성 유도, 2026-07-29) / 429 `RATE_LIMITED`(유저별 분당 상한) / 503 `AI_UNAVAILABLE`
 
-## 6-B. GET /v1/exercises/{slug}/video
+## 6-B. GET /ai/v1/exercises/{slug}/video
 
 운동 가이드 영상의 **presigned URL 재발급**. `exerciseGif` payload의 URL이 만료됐을 때 클라가 호출한다.
 
@@ -251,7 +251,7 @@ chart payload:
 
 ## 9. 협의 포인트 (미확정)
 
-1. ~~Gateway 라우팅 prefix `/ai` — 버저닝(`/ai/v1`) 여부~~ → **확정(2026-07-25): 호스트 분리 + 경로 버저닝** — 백엔드 `api.example.com/v1/...`, AI 서버 `ai.example.com/v1/...`
+1. ~~Gateway 라우팅 prefix `/ai` — 버저닝(`/ai/v1`) 여부~~ → 확정(2026-08-02): 단일 호스트 + ALB 경로 라우팅 — `api.fitset.kro.kr`의 `/ai/*`가 AI 서버, 코드 프리픽스는 `/ai/v1`. 2026-07-25의 호스트 분리안(`ai.example.com`)은 폐기
 2. 스트리밍 — MVP 동기 JSON, SSE 도입 시점·게이트웨이 SSE 통과 설정
 3. 스레드 5개 초과 — 자동 삭제(+`deletedThreadId` 반환) vs 409 후 유저 직접 삭제
 4. 레이트리밋 — 메시지 분당·루틴 생성 일일 상한, Gateway 적용 여부
