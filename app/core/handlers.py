@@ -38,7 +38,15 @@ def _error_response(
 
 
 async def _domain_exception_handler(request: Request, exc: DomainError) -> JSONResponse:
-    """도메인 예외를 시맨틱 코드 그대로 실패 응답으로 번역한다."""
+    """도메인 예외를 시맨틱 코드 그대로 실패 응답으로 번역한다.
+
+    4xx는 정상 흐름이라 조용히, 5xx는 서버측 장애(SSM·내부 API 등)라 원인 체인을 남긴다.
+    """
+    if exc.status_code >= 500:
+        logger.error(
+            "domain error %s: %s %s", exc.code, request.method, request.url.path,
+            exc_info=exc, extra={"trace_id": getattr(request.state, "trace_id", "-")},
+        )
     return _error_response(request, exc.status_code, exc.code, exc.message)
 
 
