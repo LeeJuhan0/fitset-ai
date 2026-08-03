@@ -20,8 +20,9 @@ def _client():
     return boto3.client(
         "s3",
         region_name=settings.aws_region,
-        # SigV4 고정 — presigned URL이 모든 리전에서 동일하게 검증되도록
-        config=Config(signature_version="s3v4"),
+        # SigV4 고정 + virtual 주소 강제 — 기본값이면 글로벌 엔드포인트 호스트에
+        # 리전 서명이 붙어 S3가 400(AuthorizationQueryParametersError)을 낸다 (실측)
+        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
     )
 
 

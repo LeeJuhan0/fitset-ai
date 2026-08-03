@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     exercise_metadata_path: str = "data/exercise-metadata.ko.json"
 
     # 운동 가이드 영상 (비공개 S3) — 재생 URL은 요청 시점에 presigned GET으로 서명한다
-    exercise_video_bucket: str = "fitset-media"
-    exercise_video_key_template: str = "exercises/{slug}/guide.mp4"   # 내부 API videoKey 미제공 시 폴백
+    # 실제 업로드 위치 기준 (fitset-media 버킷은 미생성 — 2026-08-03 실측)
+    exercise_video_bucket: str = "fitset-exercise-media"
+    exercise_video_key_template: str = "videos/{slug}.mp4"   # 내부 API videoKey 미제공 시 폴백
     presign_expires_seconds: int = 3600   # 1시간 — 클라는 만료 시 §6-B로 재발급
 
     # 백엔드 내부 API (스프링)
