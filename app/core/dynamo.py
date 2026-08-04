@@ -20,8 +20,9 @@ MySQL과의 차이는 트리 유무가 아니라, 트리가 파티션 단위로 
 LSI(같은 파티션 키 + 다른 정렬 키, 테이블 생성 시에만)가 필요 — FilterExpression은
 읽은 뒤 버리는 것이라 스캔량만큼 과금되는 가짜 최적화다.
 
-put_item·query 등은 boto3 메서드지만 와이어는 전부 RPC-over-HTTP — REST 동사 없이
-항상 POST / 에 X-Amz-Target 헤더로 연산명을 싣는다. 서명(SigV4)·재시도는 boto3 담당.
+put_item·query 등은 boto3 메서드지만 와이어는 전부 RPC-over-HTTP — REST GET/PUT/DELETE 동사 없이
+항상 POST / 에 X-Amz-Target 헤더로 연산명을 싣는다. DynamoDB_20120810.PutItem 같은 헤더로 
+"어떤 연산인지"를 담고 본문은 JSON 입력, 서명(SigV4) 재시도는 boto3 담당.
 """
 import json
 from decimal import Decimal

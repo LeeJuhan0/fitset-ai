@@ -17,7 +17,8 @@ MAX_BUCKETS = 10000
 
 
 class RateLimiter:
-    """토큰버킷 — 분당 per_minute개 충전, 최대 보유량(burst)도 per_minute.
+    """
+    토큰버킷 — 분당 per_minute개 충전, 최대 보유량(burst)도 per_minute.
 
     allow(key="user-A") 호출 (per_minute=5 예시)
        │
