@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     spring_internal_base_url: str = "http://localhost:8080/internal"
     workout_days: int = 28   # 최근 기록 조회 기간 — 내부 API days 파라미터
 
-    # 인증 (JWT RS256) — SSM 공개키, 로컬 개발은 PEM 직접 주입으로 우회
-    ssm_jwt_public_key_name: str = "/fitset/auth/jwt-public-key"
+    # 인증 (JWT RS256) — 백엔드가 게시한 JWKS 공개키로 검증, 로컬 개발은 PEM 직접 주입으로 우회
+    # (로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증되지 않는다)
+    jwks_url: str = "https://api.fitset.kro.kr/.well-known/jwks.json"
     jwt_public_key_pem: str | None = None
 
     # Bedrock — 임베딩 모델은 global.cohere.embed-v4:0 고정 (CLAUDE.md)
