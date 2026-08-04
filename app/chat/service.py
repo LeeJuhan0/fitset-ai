@@ -7,6 +7,7 @@ repository는 전부 동기 함수라 asyncio.to_thread로 감싼다 — 이벤�
 """
 import asyncio
 import logging
+from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -23,6 +24,7 @@ from app.core import llm, ratelimit
 from app.core.config import get_settings
 from app.core.errors import (
     AiUnavailableError,
+    DomainError,
     RateLimitedError,
     ThreadFullError,
     ThreadNotFoundError,
@@ -97,8 +99,59 @@ async def list_messages(user_id: str, thread_id: str, limit: int, cursor: str | 
     )
 
 
-async def send_message(user_id: str, thread_id: str, content: str) -> MessageSendData:
-    """메시지 전송 → 챗봇 응답 (§6). MVP는 동기 JSON 1회."""
+@dataclass
+class _Turn:
+    """전송 턴의 준비물 — 프롬프트·최근 대화·병렬 제목 태스크."""
+
+    system_prompt: str
+    history: list
+    title_task: asyncio.Task | None
+
+    def cancel_title(self) -> None:
+        if self.title_task is not None:
+            self.title_task.cancel()
+
+    async def title(self) -> str | None:
+        return await self.title_task if self.title_task is not None else None
+
+
+async def send_message_stream(user_id: str, thread_id: str, content: str):
+    """메시지 전송 SSE 턴 (§4.6) — ("delta", str)·("done", MessageSendData)·("error", 예외)를 낸다.
+
+    검증과 유저 메시지 저장은 첫 이벤트 전에 끝난다 — 라우터가 첫 이벤트를 미리 당기므로
+    여기서 던진 도메인 예외(404·409·429)와 첫 delta 전의 실패는 HTTP JSON으로 나간다.
+    첫 delta 이후의 실패만 error 이벤트로 스트림에 실린다(§4.6 오류 규약).
+    """
+    turn = await _begin_turn(user_id, thread_id, content)
+
+    result = None
+    try:
+        async for kind, value in graph.run_turn_stream(user_id, turn.system_prompt, turn.history):
+            if kind == "delta":
+                yield "delta", value
+            else:
+                result = value
+    except Exception:
+        logger.exception("agent stream failed")
+        result = None
+    if result is None:
+        # 실패 턴은 assistant를 저장하지 않는다 — user 메시지는 남는다(§4.6 규약 5, 멱등성 ⑧)
+        turn.cancel_title()
+        yield "error", AiUnavailableError()
+        return
+
+    try:
+        data = await _persist_answer(user_id, thread_id, result, turn)
+    except Exception:
+        # 본문은 이미 흘러갔다 — 저장 실패를 숨기지 않고 error로 알린다(클라는 재시도 UI)
+        logger.exception("assistant persist failed")
+        yield "error", DomainError()
+        return
+    yield "done", data
+
+
+async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
+    """턴 준비 — 레이트리밋·스레드·상한 검증, user 메시지 저장, 프롬프트·제목 태스크 조립."""
     settings = get_settings()
     # 어떤 조회보다 먼저 — 한 턴이 Bedrock 호출 여러 번이라 abuse는 여기서 끊는다
     if not ratelimit.chat_limiter().allow(user_id):
@@ -115,7 +168,7 @@ async def send_message(user_id: str, thread_id: str, content: str) -> MessageSen
         raise ThreadFullError()
 
     now = domain.now_utc()
-    user_message = {
+    await asyncio.to_thread(repository.put_message, {
         "thread_id": thread_id,
         "message_id": domain.new_ulid(now),
         "user_id": user_id,
@@ -124,19 +177,22 @@ async def send_message(user_id: str, thread_id: str, content: str) -> MessageSen
         "response_scheme": None,
         "payload": None,
         "created_at": domain.iso_utc(now),
-    }
-    await asyncio.to_thread(repository.put_message, user_message)
+    })
 
-    system_prompt = prompts.chat_system(user_summary, thread.get("summary_text"))
-    history = [*_to_lc_messages(recent), HumanMessage(content=content)]
-
-    # 제목이 없으면 첫 발화 기준으로 만든다 — 에이전트 호출과 병렬이라 지연이 늘지 않는다
-    needs_title = thread.get("title") is None
-    result, title = await asyncio.gather(
-        _run_agent(user_id, system_prompt, history),
-        _make_title(content) if needs_title else _noop(),
+    return _Turn(
+        system_prompt=prompts.chat_system(user_summary, thread.get("summary_text")),
+        history=[*_to_lc_messages(recent), HumanMessage(content=content)],
+        # 제목이 없으면 첫 발화 기준으로 만든다 — 에이전트 스트림과 병렬이라 지연이 늘지 않는다
+        title_task=asyncio.create_task(_make_title(content)) if thread.get("title") is None else None,
     )
 
+
+async def _persist_answer(
+    user_id: str, thread_id: str, result: graph.AgentResult, turn: _Turn
+) -> MessageSendData:
+    """assistant 메시지 저장과 활동 갱신 — done 이벤트에 실을 payload를 만든다."""
+    settings = get_settings()
+    title = await turn.title()
     answered_at = domain.now_utc()
     assistant_message = {
         "thread_id": thread_id,
@@ -234,15 +290,6 @@ async def _purge_thread(user_id: str, thread_id: str) -> None:
     return None
 
 
-async def _run_agent(user_id: str, system_prompt: str, history: list) -> graph.AgentResult:
-    """에이전트 실행. 실패는 503으로 — 대화 응답에는 폴백 문구가 없다."""
-    try:
-        return await graph.run_turn(user_id, system_prompt, history)
-    except Exception as exc:
-        logger.exception("agent turn failed")
-        raise AiUnavailableError() from exc
-
-
 async def _make_title(first_message: str) -> str:
     """첫 발화 → 스레드 제목. LLM 실패 시 앞 N자로 폴백한다."""
     settings = get_settings()
@@ -256,11 +303,6 @@ async def _make_title(first_message: str) -> str:
     if not title:
         return domain.fallback_title(first_message, settings.chat_title_max_length)
     return domain.fallback_title(title, settings.chat_title_max_length)
-
-
-async def _noop() -> None:
-    """제목 생성이 필요 없을 때 gather 자리를 채운다."""
-    return None
 
 
 def _to_lc_messages(items: list[dict]) -> list:

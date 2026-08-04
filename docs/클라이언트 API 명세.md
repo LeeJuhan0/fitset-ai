@@ -134,23 +134,27 @@ Path Parameter:
 - user 메시지는 `responseScheme`·`payload` 모두 `null`
 - 오류: 400 (limit 범위·빈 cursor) / 401 / 403 / 404 (스레드 없음·만료)
 
-## 6. POST /ai/v1/threads/{threadId}/messages
+## 6. POST /ai/v1/threads/{threadId}/messages (SSE, 2026-08-04 전환)
 
 요청: `{ "content": "이 루틴에서 스쿼트 빼줘" }` (1~1000자)
 
-응답:
+성공 응답은 `200 OK`, `Content-Type: text/event-stream` — traceId는 `X-Trace-Id` 헤더. 이벤트 3종:
 
-```json
-{
-  "message": {
-    "messageId": "oid", "role": "assistant", "content": "...",
-    "responseScheme": "routine", "payload": { }, "createdAt": "..."
-  },
-  "threadTitle": "하체 루틴 조정"   // 제목 생성·변경 시에만 값, 이외 null — 목록 화면 갱신용
-}
+```
+event: delta
+data: {"text":"스쿼트를 빼고"}
+
+:ping
+
+event: done
+data: {"message":{"messageId":"oid","role":"assistant","content":"...","responseScheme":"routine","payload":{},"createdAt":"..."},"threadTitle":"하체 루틴 조정"}
 ```
 
-오류: 400(길이) / 401 / 403 / 404(→ 클라는 새 스레드 생성 유도) / 409 `THREAD_FULL`(스레드당 메시지 상한 도달 → 새 스레드 생성 유도, 2026-07-29) / 429 `RATE_LIMITED`(유저별 분당 상한) / 503 `AI_UNAVAILABLE`
+- `delta`는 본문 증분 — 이어 붙이면 본문이지만 **done이 정본**(클라는 done 수신 시 교체). `payload`는 done에만
+- `threadTitle`은 제목 생성·변경 시에만 값, 이외 null — 목록 화면 갱신용
+- 무토큰 구간(툴 실행)엔 15초 이내 간격 하트비트 코멘트(`:ping`) — 클라는 무시
+- 오류: 스트림 시작 전(400 길이 / 401 / 403 / 404 / 409 `THREAD_FULL`(기본 1000, 2026-08-04 상향) / 429 / 503)은 기존 HTTP JSON. **시작 후 실패만 `error` 이벤트**(`{"traceId", "error"{...}}`) 후 스트림 종료 — 실패 턴도 user 메시지는 저장돼 있을 수 있다(멱등성 협의 ⑧)
+- 타임아웃 기준: 첫 이벤트 30s, 이벤트 간 무수신 30s
 
 ## 6-B. GET /ai/v1/exercises/{slug}/video
 

@@ -2,15 +2,20 @@
 
 목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 5개 전체 반환(ItemsData),
 메시지 목록만 커서 페이지네이션(MessagePageData — cursor·limit·nextCursor, §4.5).
+메시지 전송은 SSE 스트리밍(§4.6) — 이벤트 직렬화(delta·done·error)와 하트비트는
+전송 형식이므로 여기(HTTP 계층)가 맡고, service는 의미 이벤트만 낸다.
 요약 갱신은 응답을 보낸 뒤 BackgroundTasks로 돌린다 — 대화 지연에 얹지 않는다.
 """
+import asyncio
+import json
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Response, status
+from fastapi.responses import StreamingResponse
 
 from app import deps
 from app.chat import service
 from app.chat.schemas import (
     MessagePageData,
-    MessageSendData,
     MessageSendRequest,
     ThreadCreated,
     ThreadOut,
@@ -69,15 +74,60 @@ async def list_messages(
     return ApiResponse(trace_id=trace_id, data=data)
 
 
-@router.post("/threads/{threadId}/messages", response_model=ApiResponse[MessageSendData])
+# 무토큰 구간(툴 실행) 연결 유지 — §4.6 규약 2는 "15초 이내 간격"이다
+HEARTBEAT_SECONDS = 15
+
+
+def _sse_frame(kind: str, value, trace_id: str) -> str:
+    """의미 이벤트 → SSE 프레임 (§4.6 이벤트 3종)."""
+    if kind == "delta":
+        data = {"text": value}
+    elif kind == "done":
+        data = value.model_dump(by_alias=True)
+    else:
+        data = {"traceId": trace_id, "error": {"code": value.code, "message": value.message, "details": []}}
+    return f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/threads/{threadId}/messages")
 async def send_message(
     request_body: MessageSendRequest,
     background_tasks: BackgroundTasks,
     thread_id: str = Path(alias="threadId"),
     user_id: str = Depends(deps.get_current_user_id),
     trace_id: str = Depends(deps.get_trace_id),
-) -> ApiResponse[MessageSendData]:
-    """메시지를 보내고 챗봇 응답을 반환한다. 요약 갱신은 응답 후 백그라운드로 돈다."""
-    data = await service.send_message(user_id, thread_id, request_body.content)
+) -> StreamingResponse:
+    """메시지를 보내고 챗봇 응답을 SSE로 스트리밍한다 (§4.6). 요약 갱신은 스트림 종료 후 백그라운드."""
+    events = service.send_message_stream(user_id, thread_id, request_body.content)
+    # 첫 이벤트를 미리 당긴다 — 검증·유저 메시지 저장이 여기서 끝나므로 도메인 예외
+    # (404·409·429)와 첫 delta 전의 에이전트 실패는 스트림 없이 HTTP 오류 JSON으로 나간다
+    first = await anext(events)
+    if first[0] == "error":
+        raise first[1]
+
+    async def sse_body():
+        event = first
+        while True:
+            yield _sse_frame(event[0], event[1], trace_id)
+            if event[0] in ("done", "error"):
+                return
+            # wait_for는 타임아웃 시 대기를 취소해 제너레이터를 깨뜨린다 — wait로 하트비트를 낀다
+            task = asyncio.ensure_future(anext(events))
+            while True:
+                finished, _ = await asyncio.wait({task}, timeout=HEARTBEAT_SECONDS)
+                if finished:
+                    break
+                yield ":ping\n\n"
+            try:
+                event = task.result()
+            except StopAsyncIteration:
+                return
+
     background_tasks.add_task(service.refresh_summaries, user_id, thread_id)
-    return ApiResponse(trace_id=trace_id, data=data)
+    return StreamingResponse(
+        sse_body(),
+        media_type="text/event-stream",
+        # 중간 프록시 버퍼링 금지 — 조각이 모여서 한 번에 가면 스트리밍이 무의미하다
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=background_tasks,
+    )

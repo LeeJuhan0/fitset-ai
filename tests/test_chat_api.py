@@ -1,8 +1,11 @@
 """채팅 API 배선 테스트 — 라우터·서비스·응답 봉투를 인메모리 저장소로 태운다.
 
 DynamoDB·Bedrock은 대체한다. 검증 대상은 계약이다:
-{traceId, data} 봉투, camelCase 와이어, 목록의 page 부재, 204 본문 없음, §7 payload 계약.
+{traceId, data} 봉투, camelCase 와이어, 목록의 page 부재, 메시지 목록 커서(§4.5),
+메시지 전송 SSE 이벤트 3종(§4.6), 204 본문 없음, §7 payload 계약.
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -123,9 +126,25 @@ def client(store):
 
 
 def _answer(content="좋아요", scheme="text", payload=None):
-    async def run_turn(user_id, system_prompt, history):
-        return graph.AgentResult(content, scheme, payload)
-    return run_turn
+    """본문을 두 조각 delta로 흘리고 result로 끝나는 run_turn_stream 대역."""
+    async def run_turn_stream(user_id, system_prompt, history):
+        half = max(1, len(content) // 2)
+        yield "delta", content[:half]
+        if content[half:]:
+            yield "delta", content[half:]
+        yield "result", graph.AgentResult(content, scheme, payload)
+    return run_turn_stream
+
+
+def _events(response) -> list[tuple[str, dict]]:
+    """SSE 본문 → (event, data) 목록. 하트비트 코멘트(:ping)는 계약상 무시 대상이라 버린다."""
+    events = []
+    for block in response.text.split("\n\n"):
+        if not block.strip() or block.startswith(":"):
+            continue
+        lines = dict(line.split(": ", 1) for line in block.strip().split("\n"))
+        events.append((lines["event"], json.loads(lines["data"])))
+    return events
 
 
 def test_create_thread_returns_201_with_envelope(client):
@@ -155,19 +174,28 @@ def test_thread_quota_evicts_least_recently_active(client, store):
 
 
 def test_send_message_persists_pair_and_returns_title(client, monkeypatch, store):
-    monkeypatch.setattr(graph, "run_turn", _answer("가슴 위주로 짜봤어요"))
+    monkeypatch.setattr(graph, "run_turn_stream", _answer("가슴 위주로 짜봤어요"))
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
 
     response = client.post(
         f"/ai/v1/threads/{thread_id}/messages", json={"content": "가슴 루틴 추천해줘"}
     )
     assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["message"]["role"] == "assistant"
-    assert data["message"]["responseScheme"] == "text"
-    assert data["message"]["payload"] is None
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["X-Trace-Id"]
+
+    events = _events(response)
+    kinds = [kind for kind, _ in events]
+    assert set(kinds[:-1]) == {"delta"} and kinds[-1] == "done"
+    # delta 누적 == done 본문 (§4.6 규약 1 — done이 정본)
+    assert "".join(data["text"] for kind, data in events if kind == "delta") == "가슴 위주로 짜봤어요"
+    done = events[-1][1]
+    assert done["message"]["role"] == "assistant"
+    assert done["message"]["responseScheme"] == "text"
+    assert done["message"]["payload"] is None
+    assert done["message"]["content"] == "가슴 위주로 짜봤어요"
     # 첫 발화라 제목이 생성된다(LLM 실패 → 앞 30자 폴백)
-    assert data["threadTitle"] == "가슴 루틴 추천해줘"
+    assert done["threadTitle"] == "가슴 루틴 추천해줘"
     assert len(store.messages[thread_id]) == 2
 
 
@@ -175,7 +203,7 @@ def test_message_list_marks_user_payload_null(client, monkeypatch):
     chart = {"chartType": "line", "metric": "bodyWeight", "title": "체중 변화",
              "xLabel": "날짜", "yLabel": "체중(kg)", "x": ["7/1"],
              "series": [{"name": "체중", "values": [72.4]}]}
-    monkeypatch.setattr(graph, "run_turn", _answer("줄고 있어요", "chart", chart))
+    monkeypatch.setattr(graph, "run_turn_stream", _answer("줄고 있어요", "chart", chart))
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "체중 어때?"})
 
@@ -221,7 +249,7 @@ def test_message_list_limit_out_of_range_is_400(client):
 
 
 def test_delete_thread_removes_messages_and_returns_204(client, monkeypatch, store):
-    monkeypatch.setattr(graph, "run_turn", _answer())
+    monkeypatch.setattr(graph, "run_turn_stream", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
 
@@ -274,7 +302,7 @@ def test_create_thread_repairs_overflow_from_race(client, store):
 
 def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, store):
     # F6 — 미요약이 임계 미달이면 COUNT만 하고 메시지 페이지 조회(messages_page)를 부르지 않는다
-    monkeypatch.setattr(graph, "run_turn", _answer())
+    monkeypatch.setattr(graph, "run_turn_stream", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.list_messages_calls = 0
     client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
@@ -283,7 +311,7 @@ def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, 
 
 def test_message_rate_limit_returns_429(client, monkeypatch):
     # F17 — 유저별 분당 상한(기본 10) 초과 시 RATE_LIMITED, LLM 경로 진입 전 차단
-    monkeypatch.setattr(graph, "run_turn", _answer())
+    monkeypatch.setattr(graph, "run_turn_stream", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     responses = [
         client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
@@ -298,7 +326,7 @@ def test_thread_full_returns_409(client, monkeypatch, store):
     # F14 — 스레드당 메시지 상한(기본 1000, 2026-08-04 상향) 도달 시 THREAD_FULL, 새 스레드 유도
     from app.core.config import get_settings
 
-    monkeypatch.setattr(graph, "run_turn", _answer())
+    monkeypatch.setattr(graph, "run_turn_stream", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.messages[thread_id] = [
         {"thread_id": thread_id, "message_id": f"M{index:04d}", "user_id": USER_ID,
@@ -341,12 +369,34 @@ async def test_refresh_summarizes_only_unsummarized_tail(store, monkeypatch):
     assert store.user_summaries[USER_ID] == "병합 요약"
 
 
-def test_agent_failure_maps_to_ai_unavailable(client, monkeypatch):
+def test_agent_failure_before_first_delta_is_http_503(client, monkeypatch):
+    # 첫 delta 전 실패 — 스트림을 시작하지 않고 기존 HTTP JSON 오류로 나간다 (§4.6 규약 3)
     async def boom(user_id, system_prompt, history):
         raise RuntimeError("bedrock down")
+        yield  # 제너레이터로 만들기 위한 표식 — 도달하지 않는다
 
-    monkeypatch.setattr(graph, "run_turn", boom)
+    monkeypatch.setattr(graph, "run_turn_stream", boom)
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "AI_UNAVAILABLE"
+
+
+def test_mid_stream_failure_emits_error_event(client, monkeypatch, store):
+    # 첫 delta 이후 실패 — 이미 200이 나갔으므로 error 이벤트로 전달하고 스트림을 닫는다
+    async def flaky(user_id, system_prompt, history):
+        yield "delta", "생각 중"
+        raise RuntimeError("bedrock cut")
+
+    monkeypatch.setattr(graph, "run_turn_stream", flaky)
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
+    assert response.status_code == 200
+    events = _events(response)
+    assert events[0] == ("delta", {"text": "생각 중"})
+    kind, data = events[-1]
+    assert kind == "error"
+    assert data["error"]["code"] == "AI_UNAVAILABLE"
+    assert data["traceId"]
+    # 실패 턴은 assistant를 저장하지 않는다 — user 메시지만 남는다 (§4.6 규약 5)
+    assert [m["role"] for m in store.messages[thread_id]] == ["user"]
