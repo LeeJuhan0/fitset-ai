@@ -167,6 +167,42 @@ def test_count_unsummarized_counts_only_after_upto(tables):
     assert repository.count_unsummarized("01THREAD", "01MSG4") == 0
 
 
+def test_messages_page_first_call_returns_latest_ascending(tables):
+    # §4.5 — 커서 없는 첫 호출은 최신 limit개, 페이지 안은 시간 오름차순
+    for index in range(7):
+        repository.put_message(_message(f"01MSG{index}"))
+    items, cursor = repository.messages_page("01THREAD", limit=3)
+    assert [item["message_id"] for item in items] == ["01MSG4", "01MSG5", "01MSG6"]
+    assert cursor == "01MSG4"   # 다음 페이지는 이보다 과거
+
+
+def test_messages_page_cursor_walks_to_the_beginning(tables):
+    # 커서로 끝까지 걸으면 전 메시지가 한 번씩 나오고, 페이지를 역순으로 이으면 전체 시간순
+    for index in range(5):
+        repository.put_message(_message(f"01MSG{index}"))
+    pages, cursor = [], None
+    while True:
+        items, cursor = repository.messages_page("01THREAD", limit=2, cursor=cursor)
+        pages.append(items)
+        if cursor is None:
+            break
+    stitched = [item["message_id"] for page in reversed(pages) for item in page]
+    assert stitched == [f"01MSG{index}" for index in range(5)]
+
+
+def test_messages_page_exact_limit_boundary_terminates(tables):
+    # Limit에 정확히 걸려 끝나면 커서가 한 번 더 올 수 있다 — 빈 페이지 + None으로 종료돼야 한다
+    for index in range(4):
+        repository.put_message(_message(f"01MSG{index}"))
+    _, cursor = repository.messages_page("01THREAD", limit=2)
+    items, cursor = repository.messages_page("01THREAD", limit=2, cursor=cursor)
+    assert [item["message_id"] for item in items] == ["01MSG0", "01MSG1"]
+    if cursor is not None:
+        items, cursor = repository.messages_page("01THREAD", limit=2, cursor=cursor)
+        assert items == []
+        assert cursor is None
+
+
 def test_delete_messages_removes_every_page(tables):
     # F10 회귀 가드 — batch_writer 하나로 25개 초과·페이지 경계를 안전하게 지운다
     for index in range(60):

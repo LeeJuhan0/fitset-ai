@@ -256,14 +256,16 @@ def test_message_rate_limit_returns_429(client, monkeypatch):
 
 
 def test_thread_full_returns_409(client, monkeypatch, store):
-    # F14 — 스레드당 메시지 상한(기본 100) 도달 시 THREAD_FULL, 새 스레드 유도
+    # F14 — 스레드당 메시지 상한(기본 1000, 2026-08-04 상향) 도달 시 THREAD_FULL, 새 스레드 유도
+    from app.core.config import get_settings
+
     monkeypatch.setattr(graph, "run_turn", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.messages[thread_id] = [
         {"thread_id": thread_id, "message_id": f"M{index:04d}", "user_id": USER_ID,
          "role": "user", "content": "x", "response_scheme": None, "payload": None,
          "created_at": "2026-07-29T00:00:00Z"}
-        for index in range(100)
+        for index in range(get_settings().max_messages_per_thread)
     ]
     response = client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "안녕"})
     assert response.status_code == 409

@@ -125,6 +125,28 @@ def save_summary(user_id: str, thread_id: str, summary_text: str, summary_upto: 
         logger.info("summary skipped, thread deleted or stale upto: %s", thread_id)
 
 
+def messages_page(thread_id: str, limit: int, cursor: str | None = None) -> tuple[list[dict], str | None]:
+    """최신부터 limit개 — 과거 방향 커서 페이지 (클라이언트 API 명세 §4.5).
+
+    (시간 오름차순 페이지, next_cursor)를 돌려준다. 커서는 message_id(ULID)를
+    ExclusiveStartKey로 그대로 쓴다 — 역순 조회라 그 키보다 과거만 읽는다.
+    LastEvaluatedKey가 없으면 파티션 처음까지 읽은 것이라 next_cursor가 None이다.
+    Limit에 정확히 걸려 끝나면 커서가 한 번 더 올 수 있는데, 다음 요청이
+    빈 페이지 + None으로 끝나므로 계약(§4.5)을 깨지 않는다.
+    """
+    kwargs = {
+        "KeyConditionExpression": Key("thread_id").eq(thread_id),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+    if cursor is not None:
+        kwargs["ExclusiveStartKey"] = {"thread_id": thread_id, "message_id": cursor}
+    response = get_chat_messages_table().query(**kwargs)
+    items = [to_plain(item) for item in reversed(response.get("Items", []))]
+    next_cursor = response.get("LastEvaluatedKey", {}).get("message_id")
+    return items, next_cursor
+
+
 def list_messages(thread_id: str) -> list[dict]:
     """대화 전체를 시간순으로 — payload 포함(화면 렌더링용). SK가 ULID라 정렬이 곧 시간순."""
     items: list[dict] = []

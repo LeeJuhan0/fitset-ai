@@ -59,7 +59,8 @@ class Settings(BaseSettings):
                                       # 컨텍스트 턴 수(chat_context_turns)와 같게 유지 — 트리거가 더 크면
                                       # 컨텍스트에도 요약에도 없는 사각지대 메시지가 생긴다
     agent_max_tool_turns: int = 3     # 툴콜 루프 상한 — 무한 왕복 차단
-    max_messages_per_thread: int = 100   # 도달 시 409 THREAD_FULL — 무제한 파티션 증가 방지 (감사 F14, 500→100 2026-07-29)
+    max_messages_per_thread: int = 1000   # 도달 시 409 THREAD_FULL — 무제한 파티션 증가 방지 (감사 F14).
+                                          # 100→1000 상향 (2026-08-04, §4.5 커서 페이지네이션 도입으로 전체 로드 부담 해소)
 
     # 레이트리밋 — 인스턴스 로컬 토큰버킷, LLM 비용 abuse 차단 (감사 F17).
     # 다중 인스턴스에선 허용량이 인스턴스 수만큼 느슨해진다 — 정밀해지면 WAF·카운터로 승격
