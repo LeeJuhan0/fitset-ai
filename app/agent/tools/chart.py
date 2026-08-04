@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.agent import charts, guardrails
+from app.agent.tools import failures
 from app.clients.spring import get_spring_client
 from app.core.errors import DomainError
 from app.routines.repository import get_exercise_meta
@@ -75,6 +76,9 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     try:
         payload = await _build(user_id, request)
     except DomainError as exc:
+        if failures.is_server_fault(exc):
+            logger.warning("draw_chart server fault: %s", exc.code)
+            return failures.SERVER_FAULT_NOTE, None
         logger.info("draw_chart failed: %s", exc.code)
         return f"기록을 불러오지 못했습니다. 사유: {exc.message}", None
 

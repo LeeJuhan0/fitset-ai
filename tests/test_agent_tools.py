@@ -78,3 +78,36 @@ async def test_chart_unresolved_exercise_returns_hints_not_empty_data(monkeypatc
     assert artifact is None
     assert "비슷한 종목" in text            # "기록 부족"이 아니라 재호출 유도여야 한다
     assert "벤치프레스" in text
+
+
+async def test_routine_server_fault_forbids_account_blame(monkeypatch):
+    # 내부 API 장애(5xx)를 "계정 문제, 재로그인" 창작으로 번역하지 못하게 지시가 붙어야 한다 (prod 실측)
+    from app.core.errors import DomainError
+
+    async def fake_generate(user_id, request):
+        raise DomainError("내부 API 호출에 실패했습니다.")
+
+    monkeypatch.setattr(routines_service, "generate_routine", fake_generate)
+    text, artifact = await routine.run(USER_ID, {
+        "level": "intermediate", "muscle_groups": ["chest"], "minutes": 50,
+    })
+    assert artifact is None
+    assert "서버 일시 장애" in text
+    assert "재로그인 확인을 요구하지 말고" in text
+
+
+async def test_chart_server_fault_forbids_account_blame(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.agent.tools import chart
+    from app.core.errors import DomainError
+
+    async def fail_body_weights(user_id, days):
+        raise DomainError("내부 API 호출에 실패했습니다.")
+
+    stub = SimpleNamespace(get_body_weights=fail_body_weights)
+    monkeypatch.setattr(chart, "get_spring_client", lambda: stub)
+    text, artifact = await chart.run(USER_ID, {"metric": "bodyWeight"})
+    assert artifact is None
+    assert "서버 일시 장애" in text
+    assert "재로그인 확인을 요구하지 말고" in text

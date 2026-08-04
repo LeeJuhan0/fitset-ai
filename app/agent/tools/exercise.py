@@ -12,6 +12,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from app.agent import guardrails
+from app.agent.tools import failures
 from app.clients.spring import get_spring_client
 from app.core.errors import DomainError
 from app.exercises import service as exercises_service
@@ -50,11 +51,13 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         video = None
 
     detail: dict = {}
+    detail_fault = False
     try:
         detail = await get_spring_client().get_exercise(slug)
-    except DomainError:
+    except DomainError as exc:
         # 내부 API가 죽어도 로컬 마스터 이름만으로 답변은 가능하다
         logger.warning("exercise detail lookup failed: %s", slug, exc_info=True)
+        detail_fault = failures.is_server_fault(exc)
 
     name = detail.get("name") or guardrails.exercise_name(slug) or slug
     instructions = detail.get("instructions") or []
@@ -66,6 +69,11 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         f"수행 방법: {steps}\n"
         "위 수행 방법만 근거로 설명한다. 데이터가 없으면 동작을 지어내지 말고 그렇게 말한다."
     )
+    if detail_fault:
+        summary += (
+            "\n상세 데이터는 서버 일시 장애로 빠졌다 — 유저의 계정·로그인 문제가 아니므로 "
+            "계정 연결이나 재로그인을 언급하지 않는다."
+        )
 
     payload = {
         "slug": slug,

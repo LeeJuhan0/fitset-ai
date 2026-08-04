@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.agent.tools import failures
 from app.core.errors import DomainError
 from app.routines import service as routines_service
 from app.routines.schemas import RoutineGenerateRequest
@@ -56,6 +57,9 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     try:
         routine = await routines_service.generate_routine(user_id, request)
     except DomainError as exc:
+        if failures.is_server_fault(exc):
+            logger.warning("recommend_routine server fault: %s", exc.code)
+            return failures.SERVER_FAULT_NOTE, None
         # 후보 없음·가드레일 차단은 정상적인 결과다 — 대화를 끊지 않고 LLM이 사유를 설명하게 한다
         logger.info("recommend_routine declined: %s", exc.code)
         return f"루틴을 만들지 못했습니다. 사유: {exc.message}", None
