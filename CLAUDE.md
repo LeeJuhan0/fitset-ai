@@ -2,7 +2,7 @@
 
 운동 앱 FitSet의 AI 백엔드 — AI 채팅(스레드)과 루틴 생성·추천. FastAPI + LangGraph.
 
-인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 SSM 공개키로 직접 검증한다.
+인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 백엔드가 게시한 JWKS 공개키로 직접 검증한다.
 저장소는 **DynamoDB 온디맨드**(채팅·유저 요약·루틴, 2026-07-25 확정 — DocumentDB 미사용).
 루틴 파이프라인: S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본, PK=slug) → 부팅 시 Scan 인메모리 로드, 미스 시 GetItem 폴백. 룰 필터 검색은 항상 인메모리. **인메모리 스토어는 부팅 시점 스냅샷 — 배치가 routines를 갱신해도 재시작·재배포 전까지 반영되지 않는다**(무효화 메커니즘 없음, 2026-07-29 감사 F16).
 
@@ -13,55 +13,56 @@
 - [`docs/document-structure.md`](docs/document-structure.md) — DynamoDB 테이블 구조(ERD)와 payload JSON 규약
 - [`docs/백엔드 ERD.md`](docs/백엔드%20ERD.md) — 백엔드(Spring·MySQL) DB 참조 사본 + AI 서버 관점 정합성 체크
 
-## 인증 및 토큰(JWT) 규약 (2026-07-25 확정)
+## 인증 및 토큰(JWT) 규약 (2026-08-04 JWKS 전환)
 
-출처: [fitset 서버 비즈니스 규칙 §9](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/24379394/fitset)
+출처: [fitset 서버 비즈니스 규칙 §9](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/24379394/fitset), AI 서버 JWT 공개키(JWKS) 검증 가이드(백엔드 강인화, 2026-08-04).
+구 SSM 공개키 방식(`/fitset/auth/jwt-public-key`)은 폐기 — 이 서버는 SSM·KMS 권한이 필요 없다.
 
 ### 트래픽 구조
 
-- **API Gateway 미사용.** ELB(ALB)가 **HTTPS 종료(TLS termination)만** 담당 — ELB 뒤 내부 구간은 HTTP 평문.
+- API Gateway 미사용. ELB(ALB)가 HTTPS 종료(TLS termination)만 담당 — ELB 뒤 내부 구간은 HTTP 평문.
 - 토큰 검증은 각 수신 서버(백엔드·AI 서버)가 직접 수행한다. ELB는 인증에 관여하지 않는다.
 
-### 토큰 발급
+### 토큰 발급과 키 배포
 
-- JWT는 **자바 스프링 백엔드가 발급**한다.
-- RSA 키쌍은 백엔드가 보유하며, **개인키는 백엔드 외부로 절대 나가지 않는다.**
-- **공개키만 SSM Parameter Store에 게시** — 이 서버는 부팅 시 SSM에서 로드해 서명을 검증한다.
+- JWT는 자바 스프링 백엔드가 발급한다(access TTL 15분, 만료 시 앱이 refresh — AI 서버는 refresh에 관여하지 않는다).
+- RSA 개인키는 백엔드만 보유(SSM SecureString `/fitset/prod/jwt/private-key`, 백엔드 태스크에만 주입).
+- 공개키는 JWKS로 공개 게시 — 이 서버는 토큰 헤더 `kid`와 일치하는 키로 서명을 검증한다.
 
-### SSM 파라미터
+### JWKS
 
 | 항목 | 값 |
 | --- | --- |
-| 이름 | `/fitset/auth/jwt-public-key` |
-| 타입 | String |
-| 값 형식 | PEM (X.509 SubjectPublicKeyInfo, `-----BEGIN PUBLIC KEY-----` 블록) |
-| 리전 | ap-northeast-2 |
-| 키 로테이션 | 값 갱신 시 각 서버 재로드 필요 — 로테이션 절차는 추후 협의 |
-
-- 환경 분리가 필요해지면 `/fitset/{env}/auth/jwt-public-key` 형태로 확장 (예: `/fitset/prod/auth/jwt-public-key`).
+| 엔드포인트 | `https://api.fitset.kro.kr/.well-known/jwks.json` (정적 파일, 인증 불필요) |
+| 현재 kid | `fitset-key-2026-08` (SSM `/fitset/prod/jwt/key-id`와 일치) |
+| 캐싱 | PyJWKClient가 서명키를 캐시, 미지의 kid 도착 시 자동 재조회 |
+| 키 로테이션 | 백엔드가 JWKS에 새 키 게시 + SSM 개인키·key-id 갱신, AI 서버는 무조치(kid 재조회) |
+| 로컬 개발 | 로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증 불가 — `JWT_PUBLIC_KEY_PEM` 주입으로 우회 |
 
 ### 서명·클레임
 
 | 항목 | 값 |
 | --- | --- |
-| 서명 알고리즘 | **RS256** (RSA + SHA-256) |
+| 서명 알고리즘 | RS256 (RSA + SHA-256) |
 | `sub` | `user_id` — DB `BINARY(16)`(UUIDv7)의 표준 UUID 문자열 표현 |
-| `type` | `access` — access token 식별자 |
+| `exp` | 발급 후 15분 |
+| `iss`·`aud` | 없음 — 검증 라이브러리의 issuer·audience 검증을 켜면 안 된다 |
 
-- 검증 측 필수 절차: ① RS256 서명 검증(SSM 공개키) → ② `exp` 만료 확인 → ③ `type == "access"` 확인 → ④ `sub`를 userId로 사용.
-- `type`이 `access`가 아닌 토큰(예: refresh)으로 API를 호출하면 `401 UNAUTHORIZED`.
+- 검증 절차: ① 토큰 헤더 kid로 JWKS 공개키 조회 → ② RS256 서명 검증 → ③ `exp` 만료 확인 → ④ `sub`를 userId로 사용.
+- `type == "access"` 검사는 코드에 유지 중 — JWKS 가이드 문서의 토큰 구조에는 `type` 클레임이 없어 백엔드에 의도 확인 중(2026-08-04). 신규 토큰에 type이 없다고 확정되면 검사를 제거한다(tests/test_core_auth.py의 type 테스트 포함).
+- JWKS 조회 실패는 토큰 문제가 아니므로 401이 아닌 500(INTERNAL_ERROR)으로 구분한다.
 
 ## 현재 구현 범위 (2026-07-25)
 
 **대상**: 클라이언트 API §1 AI 루틴 생성(`POST /ai/v1/routines`) + 백엔드 내부 API 3종(프로필·운동기록·종목) 호출 클라이언트.
-**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(boto3), SSM.
+**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(boto3).
 **LLM: Amazon Nova 2 Lite(`global.amazon.nova-2-lite-v1:0`, $0.30/$2.50)** — 2026-07-29 비용 절감 확정(Haiku 4.5 대비 입력 1/3.3·출력 1/2). **반드시 global 프로필** — 1세대 Nova는 apac 프로필 강제인데 조직 SCP가 APAC 리전을 차단해 사용 불가(실측), global 라우팅만 SCP를 통과한다. 품질 문제 시 `LLM_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0`으로 즉시 롤백. 챗봇·루틴·제목·요약이 모델 하나를 공유한다(Converse API라 모델 무관 구조).
 **임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 `scripts/embed_routines.py --force` 전량 재계산 필수(임베딩 공간 호환 안 됨).
 호출 주체는 앱 클라이언트. 네트워크 인프라는 Terraform으로 별도 진행(범위 밖).
 
 루틴 생성 요청 처리 플로우:
 
-1. **인증**: `Authorization: Bearer` → SSM 공개키(RS256)로 검증 → `sub` = userId (위 인증 절차 참조)
+1. **인증**: `Authorization: Bearer` → JWKS 공개키(RS256, kid 매칭)로 검증 → `sub` = userId (위 인증 절차 참조)
 2. **유저 컨텍스트**: 내부 API로 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
 3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
 4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **내부 API 프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)

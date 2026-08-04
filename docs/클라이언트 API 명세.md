@@ -6,7 +6,7 @@
 ## 공통
 
 - Base URL: `https://api.fitset.kro.kr/ai/v1` (예: `https://api.fitset.kro.kr/ai/v1/threads`) — 단일 호스트 `api.fitset.kro.kr`에서 ALB 리스너 규칙이 Host 헤더 `api.fitset.kro.kr` + 경로 `/ai/*`를 AI 서버 대상 그룹으로 라우팅하고, 코드가 `/ai/v1` 프리픽스로 버저닝한다 (2026-08-02 전환, 기존 호스트 분리안 폐기). 나머지 경로는 백엔드로 간다. 호출 주체는 앱 클라이언트
-- 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 SSM 공개키(RS256)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-07-25 확정). 클라가 userId를 보내는 API는 없음 (사칭 방지)
+- 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 JWKS 공개키(RS256, kid 매칭)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-08-04 JWKS 전환). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
 - 목록 응답은 `data.items`, `page` 객체 없음 (스레드 최대 5개·메시지 전체 로드라 불필요)
 - LLM 포함 API(루틴 생성, 채팅)는 클라 타임아웃 30s 권장
