@@ -79,8 +79,13 @@ class InMemoryChatStore:
         thread["summary_text"] = summary_text
         thread["summary_upto"] = summary_upto
 
-    def list_messages(self, thread_id):
-        return self._sorted(thread_id)
+    def messages_page(self, thread_id, limit, cursor=None):
+        messages = self._sorted(thread_id)
+        if cursor is not None:
+            messages = [m for m in messages if m["message_id"] < cursor]
+        page = messages[-limit:]
+        next_cursor = page[0]["message_id"] if len(messages) > limit else None
+        return page, next_cursor
 
     def recent_messages(self, thread_id, limit):
         return self._sorted(thread_id)[-limit:]
@@ -320,7 +325,15 @@ def _install_fake_llm():
             return graph.AgentResult("최근 기록 기준으로 가슴 위주 루틴을 짜봤어요.", "routine", payload)
         return graph.AgentResult(f"(fake-llm) '{content[:40]}' 잘 받았어요.", "text", None)
 
+    async def fake_run_turn_stream(user_id, system_prompt, history):
+        # 캔드 응답을 8자씩 쪼개 delta로 — SSE 렌더링을 자격증명 없이 확인한다
+        result = await fake_run_turn(user_id, system_prompt, history)
+        for start in range(0, len(result.content), 8):
+            yield "delta", result.content[start:start + 8]
+        yield "result", result
+
     graph.run_turn = fake_run_turn
+    graph.run_turn_stream = fake_run_turn_stream
 
 
 # ── 조립 ──────────────────────────────────────────────────────────────
@@ -329,7 +342,7 @@ def patch_everything(fake_llm: bool):
     chat_store = InMemoryChatStore()
     for name in (
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
-        "save_summary", "list_messages", "recent_messages", "messages_after",
+        "save_summary", "messages_page", "recent_messages", "messages_after",
         "count_unsummarized", "put_message", "delete_messages",
         "get_user_summary", "save_user_summary",
     ):
