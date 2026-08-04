@@ -147,6 +147,18 @@ def _graph():
     return builder.compile()
 
 
+def _chunk_text(chunk: AnyMessage) -> str:
+    """스트리밍 청크의 텍스트 추출 — 조각 사이 공백이 의미 있어 strip하지 않는다."""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    return "".join(
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type", "text") == "text"
+    )
+
+
 def _text_of(message: AnyMessage) -> str:
     """모델 응답 본문 추출 — Converse는 content를 블록 리스트로 줄 수 있다."""
     content = getattr(message, "content", "")
@@ -160,17 +172,20 @@ def _text_of(message: AnyMessage) -> str:
     return "".join(parts).strip()
 
 
-async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) -> AgentResult:
-    """대화 1턴 실행. history 마지막이 이번 유저 발화다."""
-    state = await _graph().ainvoke({
+def _initial_state(user_id: str, system_prompt: str, history: list[AnyMessage]) -> dict:
+    """그래프 입력 상태 조립 — 동기·스트리밍 실행이 공유한다."""
+    return {
         "messages": [SystemMessage(content=system_prompt), *history],  # 시스템(규칙+요약) + 최근 6턴 + 이번 발화
         "user_id": user_id,     # 툴 실행용 — LLM 인자가 아니라 state 주입 (사칭 방지)
         "artifacts": [],        # 툴이 만든 payload 채널 — LLM 텍스트와 분리해 오염 차단
         "tool_turns": 0,        # 툴콜 왕복 카운터 — 상한 도달 시 루프 강제 종료
-    })
+    }
 
+
+def _finalize(state: dict) -> AgentResult:
+    """최종 state → AgentResult. 마지막 AI 텍스트와 artifacts[-1]을 guardrails로 확정한다."""
     content = ""
-    for message in reversed(state["messages"]):
+    for message in reversed(state.get("messages", [])):
         if message.type == "ai" and not getattr(message, "tool_calls", None):
             content = _text_of(message)
             break
@@ -186,3 +201,32 @@ async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) 
         logger.warning("agent produced no text, using fallback")
         content = "요청을 처리했어요. 결과를 확인해보세요."
     return AgentResult(content, scheme, payload)
+
+
+async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) -> AgentResult:
+    """대화 1턴 실행. history 마지막이 이번 유저 발화다."""
+    state = await _graph().ainvoke(_initial_state(user_id, system_prompt, history))
+    return _finalize(state)
+
+
+async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMessage]):
+    """대화 1턴 스트리밍 실행 — ("delta", 본문 조각)을 흘리고 마지막에 ("result", AgentResult).
+
+    조각은 agent 노드의 LLM 토큰만이다 — tools 노드(툴 결과)는 본문이 아니라 거른다.
+    툴 실행 구간은 조각이 없는 게 정상이며 연결 유지(하트비트)는 호출부 몫이다(§4.6).
+    툴콜 앞에 붙는 텍스트 등으로 delta 누적과 최종 본문이 다를 수 있다 — done이 정본(§4.6 규약 1).
+    """
+    inputs = _initial_state(user_id, system_prompt, history)
+    final_state: dict = {}
+    # messages 모드 = LLM 토큰 청크, values 모드 = 스텝마다의 전체 state(마지막 것이 최종)
+    async for mode, payload in _graph().astream(inputs, stream_mode=["messages", "values"]):
+        if mode == "values":
+            final_state = payload
+            continue
+        chunk, metadata = payload
+        if metadata.get("langgraph_node") != "agent":
+            continue
+        text = _chunk_text(chunk)
+        if text:
+            yield "delta", text
+    yield "result", _finalize(final_state)
