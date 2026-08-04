@@ -208,4 +208,4 @@ def test_delete_messages_removes_every_page(tables):
     for index in range(60):
         repository.put_message(_message(f"01MSG{index:03d}"))
     repository.delete_messages("01THREAD")
-    assert repository.list_messages("01THREAD") == []
+    assert repository.messages_page("01THREAD", limit=100) == ([], None)

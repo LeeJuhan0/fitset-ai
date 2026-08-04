@@ -1,15 +1,15 @@
 """채팅 도메인 라우터. HTTP 입출력만 담당한다.
 
-목록 응답은 ListData(page 포함)가 아니라 ItemsData를 쓴다 — 클라이언트 API 명세 §공통이
-`page` 객체를 내보내지 않기로 확정했기 때문(스레드 최대 5개·메시지 전체 로드).
+목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 5개 전체 반환(ItemsData),
+메시지 목록만 커서 페이지네이션(MessagePageData — cursor·limit·nextCursor, §4.5).
 요약 갱신은 응답을 보낸 뒤 BackgroundTasks로 돌린다 — 대화 지연에 얹지 않는다.
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, Path, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Path, Query, Response, status
 
 from app import deps
 from app.chat import service
 from app.chat.schemas import (
-    MessageOut,
+    MessagePageData,
     MessageSendData,
     MessageSendRequest,
     ThreadCreated,
@@ -55,15 +55,18 @@ async def delete_thread(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/threads/{threadId}/messages", response_model=ApiResponse[ItemsData[MessageOut]])
+@router.get("/threads/{threadId}/messages", response_model=ApiResponse[MessagePageData])
 async def list_messages(
     thread_id: str = Path(alias="threadId"),
+    # 커서는 이전 응답의 nextCursor 그대로 — 불투명 문자열 (빈 문자열만 검증 차단)
+    cursor: str | None = Query(default=None, min_length=1),
+    limit: int = Query(default=50, ge=1, le=100),
     user_id: str = Depends(deps.get_current_user_id),
     trace_id: str = Depends(deps.get_trace_id),
-) -> ApiResponse[ItemsData[MessageOut]]:
-    """대화 전체를 시간순으로 반환한다 (payload 포함)."""
-    messages = await service.list_messages(user_id, thread_id)
-    return ApiResponse(trace_id=trace_id, data=ItemsData(items=messages))
+) -> ApiResponse[MessagePageData]:
+    """메시지 목록 — 커서 없는 첫 호출은 최신 limit개, 커서로 과거 방향 (payload 포함)."""
+    data = await service.list_messages(user_id, thread_id, limit, cursor)
+    return ApiResponse(trace_id=trace_id, data=data)
 
 
 @router.post("/threads/{threadId}/messages", response_model=ApiResponse[MessageSendData])

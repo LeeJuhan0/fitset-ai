@@ -34,6 +34,11 @@ class MessageOut(CamelModel):
     created_at: str
 
 
+class MessagePageData(CamelModel):
+    items: list[MessageOut]      # 페이지 안은 시간 오름차순 — 클라가 기존 목록 위에 그대로 끼운다 (§4.5)
+    next_cursor: str | None      # 더 과거 페이지 커서. 처음까지 읽었으면 null
+
+
 class MessageSendRequest(CamelModel):
     content: str = Field(min_length=1, max_length=1000)
 

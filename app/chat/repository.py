@@ -147,21 +147,6 @@ def messages_page(thread_id: str, limit: int, cursor: str | None = None) -> tupl
     return items, next_cursor
 
 
-def list_messages(thread_id: str) -> list[dict]:
-    """대화 전체를 시간순으로 — payload 포함(화면 렌더링용). SK가 ULID라 정렬이 곧 시간순."""
-    items: list[dict] = []
-    kwargs = {
-        "KeyConditionExpression": Key("thread_id").eq(thread_id),
-        "ScanIndexForward": True,
-    }
-    while True:
-        response = get_chat_messages_table().query(**kwargs)
-        items.extend(to_plain(item) for item in response.get("Items", []))
-        if "LastEvaluatedKey" not in response:
-            return items
-        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-
-
 def recent_messages(thread_id: str, limit: int) -> list[dict]:
     """LLM 컨텍스트용 최근 N턴 — payload 제외 투영, 역순 조회 후 뒤집어 시간순으로 돌려준다."""
     response = get_chat_messages_table().query(

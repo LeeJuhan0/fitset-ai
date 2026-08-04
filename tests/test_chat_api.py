@@ -50,15 +50,20 @@ class FakeStore:
         thread["summary_upto"] = summary_upto
 
     def _sorted_messages(self, thread_id):
-        # 내부 공용 — list_messages를 거치면 F6 카운터가 오염된다
+        # 내부 공용 — messages_page를 거치면 F6 카운터가 오염된다
         # (실제 repository에선 recent/count가 별도 Query라 전체 읽기가 아니다)
         return [dict(m) for m in sorted(
             self.messages.get(thread_id, []), key=lambda m: m["message_id"]
         )]
 
-    def list_messages(self, thread_id):
+    def messages_page(self, thread_id, limit, cursor=None):
         self.list_messages_calls += 1
-        return self._sorted_messages(thread_id)
+        messages = self._sorted_messages(thread_id)
+        if cursor is not None:
+            messages = [m for m in messages if m["message_id"] < cursor]
+        page = messages[-limit:]
+        next_cursor = page[0]["message_id"] if len(messages) > limit else None
+        return page, next_cursor
 
     def count_unsummarized(self, thread_id, summary_upto):
         messages = self.messages.get(thread_id, [])
@@ -93,7 +98,7 @@ def store(monkeypatch):
     fake = FakeStore()
     for name in (
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
-        "save_summary", "list_messages", "recent_messages", "put_message",
+        "save_summary", "messages_page", "recent_messages", "put_message",
         "delete_messages", "get_user_summary", "save_user_summary",
     ):
         monkeypatch.setattr(repository, name, getattr(fake, name))
@@ -174,11 +179,45 @@ def test_message_list_marks_user_payload_null(client, monkeypatch):
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "체중 어때?"})
 
-    items = client.get(f"/ai/v1/threads/{thread_id}/messages").json()["data"]["items"]
+    data = client.get(f"/ai/v1/threads/{thread_id}/messages").json()["data"]
+    items = data["items"]
     assert [item["role"] for item in items] == ["user", "assistant"]
     assert items[0]["responseScheme"] is None and items[0]["payload"] is None
     assert items[1]["responseScheme"] == "chart"
     assert items[1]["payload"]["metric"] == "bodyWeight"
+    assert data["nextCursor"] is None   # 대화가 limit 이하라 단일 페이지
+
+
+def test_message_list_pages_backwards_with_cursor(client, store):
+    # §4.5 — 첫 호출은 최신 limit개 + nextCursor, 커서로 과거 페이지, 처음 도달 시 null
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    store.messages[thread_id] = [
+        {"thread_id": thread_id, "message_id": f"M{index:04d}", "user_id": USER_ID,
+         "role": "user", "content": f"m{index}", "response_scheme": None, "payload": None,
+         "created_at": "2026-08-04T00:00:00Z"}
+        for index in range(5)
+    ]
+    first = client.get(f"/ai/v1/threads/{thread_id}/messages?limit=2").json()["data"]
+    assert [item["messageId"] for item in first["items"]] == ["M0003", "M0004"]
+    assert first["nextCursor"] == "M0003"
+
+    second = client.get(
+        f"/ai/v1/threads/{thread_id}/messages?limit=2&cursor={first['nextCursor']}"
+    ).json()["data"]
+    assert [item["messageId"] for item in second["items"]] == ["M0001", "M0002"]
+
+    last = client.get(
+        f"/ai/v1/threads/{thread_id}/messages?limit=2&cursor={second['nextCursor']}"
+    ).json()["data"]
+    assert [item["messageId"] for item in last["items"]] == ["M0000"]
+    assert last["nextCursor"] is None
+
+
+def test_message_list_limit_out_of_range_is_400(client):
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    response = client.get(f"/ai/v1/threads/{thread_id}/messages?limit=101")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
 def test_delete_thread_removes_messages_and_returns_204(client, monkeypatch, store):
@@ -234,7 +273,7 @@ def test_create_thread_repairs_overflow_from_race(client, store):
 
 
 def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, store):
-    # F6 — 미요약이 임계 미달이면 COUNT만 하고 파티션 전체(list_messages)를 읽지 않는다
+    # F6 — 미요약이 임계 미달이면 COUNT만 하고 메시지 페이지 조회(messages_page)를 부르지 않는다
     monkeypatch.setattr(graph, "run_turn", _answer())
     thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
     store.list_messages_calls = 0

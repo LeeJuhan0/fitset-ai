@@ -14,6 +14,7 @@ from app.agent import graph, prompts
 from app.chat import domain, repository
 from app.chat.schemas import (
     MessageOut,
+    MessagePageData,
     MessageSendData,
     ThreadCreated,
     ThreadOut,
@@ -86,11 +87,14 @@ async def delete_thread(user_id: str, thread_id: str) -> None:
     return None
 
 
-async def list_messages(user_id: str, thread_id: str) -> list[MessageOut]:
-    """대화 전체를 시간순으로 (§5). payload 포함."""
+async def list_messages(user_id: str, thread_id: str, limit: int, cursor: str | None) -> MessagePageData:
+    """메시지 목록 — 커서 없는 첫 호출은 최신 limit개, 커서로 과거 방향 (§4.5). payload 포함."""
     await _load_thread(user_id, thread_id)
-    items = await asyncio.to_thread(repository.list_messages, thread_id)
-    return [MessageOut(**domain.to_message_view(item)) for item in items]
+    items, next_cursor = await asyncio.to_thread(repository.messages_page, thread_id, limit, cursor)
+    return MessagePageData(
+        items=[MessageOut(**domain.to_message_view(item)) for item in items],
+        next_cursor=next_cursor,
+    )
 
 
 async def send_message(user_id: str, thread_id: str, content: str) -> MessageSendData:

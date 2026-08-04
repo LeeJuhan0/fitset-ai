@@ -8,7 +8,7 @@
 - Base URL: `https://api.fitset.kro.kr/ai/v1` (예: `https://api.fitset.kro.kr/ai/v1/threads`) — 단일 호스트 `api.fitset.kro.kr`에서 ALB 리스너 규칙이 Host 헤더 `api.fitset.kro.kr` + 경로 `/ai/*`를 AI 서버 대상 그룹으로 라우팅하고, 코드가 `/ai/v1` 프리픽스로 버저닝한다 (2026-08-02 전환, 기존 호스트 분리안 폐기). 나머지 경로는 백엔드로 간다. 호출 주체는 앱 클라이언트
 - 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 JWKS 공개키(RS256, kid 매칭)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-08-04 JWKS 전환). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
-- 목록 응답은 `data.items`, `page` 객체 없음 (스레드 최대 5개·메시지 전체 로드라 불필요)
+- 목록 응답은 `data.items`, `page` 객체 없음. 스레드 목록은 최대 5개 전체 반환, **메시지 목록만 커서 페이지네이션**(`cursor`·`limit`·`nextCursor`, 2026-08-04) — 커서는 불투명 문자열, 클라는 이전 응답의 `nextCursor`를 그대로 되돌려준다
 - LLM 포함 API(루틴 생성, 채팅)는 클라 타임아웃 30s 권장
 - 와이어는 camelCase (`responseScheme`, `exerciseGif`) — 내부 DB는 snake_case, 표현 계층에서 변환
 
@@ -20,7 +20,7 @@
 | GET | `/ai/v1/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
 | POST | `/ai/v1/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
 | DELETE | `/ai/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
-| GET | `/ai/v1/threads/{threadId}/messages` | 대화 전체 시간순 조회 (payload 포함) | 200 |
+| GET | `/ai/v1/threads/{threadId}/messages` | 메시지 목록 — 최신 페이지부터 과거 방향 커서 (payload 포함, 2026-08-04) | 200 |
 | POST | `/ai/v1/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
 | GET | `/ai/v1/exercises/{slug}/video` | 운동 가이드 영상 presigned URL 재발급 | 200 |
 
@@ -117,17 +117,22 @@ Path Parameter:
 
 ## 5. GET /ai/v1/threads/{threadId}/messages
 
+쿼리: `cursor`(선택, 이전 응답의 `nextCursor`) · `limit`(선택, 기본 50, 1~100). 커서 없는 첫 호출은 최신 `limit`개 (2026-08-04 커서 페이지네이션, 종전 전체 반환 폐지).
+
 ```json
 {
   "items": [
     { "messageId": "oid", "role": "user", "content": "...", "responseScheme": null, "payload": null, "createdAt": "..." },
     { "messageId": "oid", "role": "assistant", "content": "...", "responseScheme": "routine", "payload": { }, "createdAt": "..." }
-  ]
+  ],
+  "nextCursor": "oid"
 }
 ```
 
+- 페이징 방향은 과거로 — 위로 스크롤 시 `nextCursor`로 이전 페이지 요청, `null`이면 대화의 처음까지 읽은 것
+- 페이지 안의 `items`는 시간 오름차순 — 클라는 기존 목록 위에 그대로 끼워 넣는다
 - user 메시지는 `responseScheme`·`payload` 모두 `null`
-- 오류: 401 / 403 / 404 (스레드 없음·만료)
+- 오류: 400 (limit 범위·빈 cursor) / 401 / 403 / 404 (스레드 없음·만료)
 
 ## 6. POST /ai/v1/threads/{threadId}/messages
 
