@@ -9,14 +9,29 @@
 """
 import logging
 import re
+from enum import StrEnum
 from functools import lru_cache
 
 from app.routines.repository import get_exercise_meta
 
 logger = logging.getLogger("fitset")
 
-PAYLOAD_SCHEMES = frozenset({"chart", "exerciseGif", "routine"})
-DEFAULT_SCHEME = "text"
+
+class ResponseScheme(StrEnum):
+    """responseScheme 어휘 (클라이언트 API 명세 §5) — 이 4개가 전부다.
+
+    StrEnum이라 멤버가 곧 문자열이다: 비교("chart" == CHART), dict 키, JSON 직렬화,
+    로그 포맷(%s → "chart") 전부 평문자열처럼 동작하면서, 오타는 정의 시점에 잡힌다.
+    """
+
+    TEXT = "text"
+    CHART = "chart"
+    EXERCISE_GIF = "exerciseGif"
+    ROUTINE = "routine"
+
+
+PAYLOAD_SCHEMES = frozenset({ResponseScheme.CHART, ResponseScheme.EXERCISE_GIF, ResponseScheme.ROUTINE})
+DEFAULT_SCHEME = ResponseScheme.TEXT
 
 
 def _normalize(text: str) -> str:

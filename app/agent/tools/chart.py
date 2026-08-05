@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.agent.guardrails import ResponseScheme
 from app.agent import charts, guardrails
 from app.agent.tools import failures
 from app.clients.spring import get_spring_client
@@ -93,7 +94,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         f"구간 {payload['x'][0]}~{payload['x'][-1]}, 값 {values}. "
         "차트는 앱이 렌더링하므로 답변에서는 이 수치가 뜻하는 변화만 짧게 해석한다."
     )
-    return summary, {"response_scheme": "chart", "payload": payload}
+    return summary, {"response_scheme": ResponseScheme.CHART, "payload": payload}
 
 
 async def _build(user_id: str, request: DrawChart) -> dict | None:

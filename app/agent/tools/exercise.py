@@ -84,4 +84,4 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         "videoUrl": video["videoUrl"] if video else None,
         "expiresAt": video["expiresAt"] if video else None,
     }
-    return summary, {"response_scheme": "exerciseGif", "payload": payload}
+    return summary, {"response_scheme": guardrails.ResponseScheme.EXERCISE_GIF, "payload": payload}

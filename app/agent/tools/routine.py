@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.agent.guardrails import ResponseScheme
 from app.agent.tools import failures
 from app.core.errors import DomainError
 from app.routines import service as routines_service
@@ -71,4 +72,4 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         f"({routine.estimated_minutes}분, {len(routine.exercises)}종목: {names}). "
         "구성은 앱이 카드로 보여주므로 답변에서는 왜 이렇게 골랐는지만 짧게 설명한다."
     )
-    return summary, {"response_scheme": "routine", "payload": payload}
+    return summary, {"response_scheme": ResponseScheme.ROUTINE, "payload": payload}
