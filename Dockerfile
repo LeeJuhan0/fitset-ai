@@ -18,6 +18,9 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
 # 애플리케이션 + 종목 마스터 데이터 (exercise-metadata만 필요)
 COPY app/ app/
 COPY data/exercise-metadata.ko.json data/exercise-metadata.ko.json
+# 배치 스크립트 — 같은 이미지를 EventBridge Scheduler가 ECS RunTask로 띄워 CMD만 바꿔 실행한다
+# (종목 카탈로그 일 1회 동기화). 서버 실행에는 쓰이지 않는다
+COPY scripts/ scripts/
 
 EXPOSE 8000
 
