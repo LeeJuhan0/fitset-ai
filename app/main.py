@@ -122,10 +122,18 @@ def _log_access(request: Request, status: int, started: float) -> None:
     if request.url.path in ("/health", "/ai/v1/health"):
         return
     elapsed_ms = (time.perf_counter() - started) * 1000
-    level = logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO
     logger.log(
-        level, "%s %s %d %.0fms", request.method, request.url.path, status, elapsed_ms,
+        _level_for(status), "%s %s %d %.0fms", request.method, request.url.path, status, elapsed_ms,
     )
+
+
+def _level_for(status: int) -> int:
+    """상태 코드 → 로그 레벨. 5xx는 서버 장애, 4xx는 클라 잘못, 나머지는 정상."""
+    if status >= 500:
+        return logging.ERROR
+    if status >= 400:
+        return logging.WARNING
+    return logging.INFO
 
 
 @app.get("/health", include_in_schema=False)
