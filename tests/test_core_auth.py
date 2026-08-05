@@ -104,3 +104,13 @@ def test_jwks_outage_is_server_error(jwks_mode):
     with pytest.raises(DomainError) as caught:
         auth.verify_token(_token())
     assert not isinstance(caught.value, UnauthorizedError)
+
+
+def test_rejected_token_reason_is_logged(pem_mode, caplog):
+    # 401 응답은 이유를 숨기지만 로그에는 원인(만료·서명 등)이 남아야 한다 (2026-08-05)
+    import logging as _logging
+    with caplog.at_level(_logging.INFO, logger="fitset"):
+        with pytest.raises(UnauthorizedError):
+            auth.verify_token(_token(exp=int(time.time()) - 60))
+    msgs = [r.getMessage() for r in caplog.records if r.name == "fitset"]
+    assert any("token rejected" in m and "ExpiredSignatureError" in m for m in msgs), msgs
