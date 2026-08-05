@@ -59,10 +59,16 @@ class _TraceIdFilter(logging.Filter):
 
 
 def configure_logging() -> None:
-    """root 로거의 레벨과 포맷을 설정하고 traceId 필터를 부착한다."""
+    """root 로거의 레벨과 포맷을 설정하고 traceId 필터를 부착한다.
+
+    uvicorn 기본 액세스 로그는 끈다 — 같은 요청이 두 줄로 남는 것을 막고,
+    소요 시간·traceId가 담긴 미들웨어 로그(main.py) 한 줄만 남긴다.
+    uvicorn.error(부팅·종료·예외)는 그대로 둔다.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s [%(trace_id)s] %(message)s",
     )
     for handler in logging.getLogger().handlers:
         handler.addFilter(_TraceIdFilter())
+    logging.getLogger("uvicorn.access").disabled = True

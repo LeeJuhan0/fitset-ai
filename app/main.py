@@ -5,6 +5,7 @@
 """
 import asyncio
 import logging
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -90,15 +91,41 @@ state에서, 못 가진 코드(콜스택 깊은 곳의 로깅 필터)는 Context
 """
 @app.middleware("http")
 async def trace_id_middleware(request: Request, call_next) -> Response:
-    """요청의 traceId를 정하고 로그 컨텍스트와 응답 헤더에 전파한다."""
+    """요청의 traceId를 정해 로그 컨텍스트·응답 헤더에 전파하고, 완료를 한 줄로 남긴다.
+
+    uvicorn 액세스 로그를 끈 대신(core/logging.py) 여기서 유일한 액세스 로그를 낸다 —
+    메서드·경로·상태·소요 시간이 traceId와 함께 남아 요청 하나를 끝까지 추적할 수 있다.
+    """
     request.state.trace_id = request.headers.get(TRACE_ID_HEADER) or uuid.uuid4().hex
     token = trace_id_var.set(request.state.trace_id)
+    started = time.perf_counter()
+
+    # 예외 핸들러가 못 잡은 예외로 call_next가 죽으면 status가 500인 채 finally로 간다
+    status = 500
     try:
         response = await call_next(request)
+        status = response.status_code
+        response.headers[TRACE_ID_HEADER] = request.state.trace_id
+        return response
     finally:
+        _log_access(request, status, started)
         trace_id_var.reset(token)
-    response.headers[TRACE_ID_HEADER] = request.state.trace_id
-    return response
+
+
+def _log_access(request: Request, status: int, started: float) -> None:
+    """요청 완료 1줄. 상태에 따라 레벨을 나눠 CloudWatch 필터가 의미를 갖게 한다.
+
+    헬스체크는 남기지 않는다 — ALB가 15초마다 두 서브넷에서 호출해 실 트래픽을 덮는다
+    (2026-08-05 실측: 2시간 로그 873줄 중 489줄이 /health).
+    스트리밍 응답(SSE)의 소요 시간은 전송 완료가 아니라 첫 바이트까지다.
+    """
+    if request.url.path in ("/health", "/ai/v1/health"):
+        return
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    level = logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO
+    logger.log(
+        level, "%s %s %d %.0fms", request.method, request.url.path, status, elapsed_ms,
+    )
 
 
 @app.get("/health", include_in_schema=False)
