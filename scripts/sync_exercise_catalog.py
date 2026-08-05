@@ -1,6 +1,7 @@
 """백엔드 종목 마스터 → DynamoDB `exercise_catalog` 동기화 배치 (일 1회).
 
-AI 서버가 자체 생성할 수 없는 값만 들여온다 — 백엔드 UUID(exerciseId)와 CDN 썸네일·영상 URL.
+AI 서버가 자체 생성할 수 없는 값만 들여온다 — 백엔드 UUID(exerciseId), 종목 수행 방식
+(exerciseType — 세트를 무게·렙으로 줄지 시간으로 줄지 가른다), CDN 썸네일·영상 URL.
 한글명·부위·장비 등은 repo 동봉 metadata(206종)가 정본이라 저장하지 않는다.
 
 출처는 백엔드 공개 API `GET /api/v1/exercises` — 무인증으로 200을 반환한다(2026-08-05 실측).
@@ -49,6 +50,8 @@ def build_items(backend: dict[str, dict], slugs: set[str]) -> list[dict]:
         items.append({
             "slug": slug,
             "exercise_id": entry["id"],
+            # 세트 구성 분기 키 — WEIGHT_AND_REPS(166) · REPS_ONLY(32) · DURATION(8)
+            "exercise_type": entry.get("exerciseType"),
             "thumbnail_url": entry.get("thumbnailUrl"),
             "video_url": entry.get("videoUrl"),
         })

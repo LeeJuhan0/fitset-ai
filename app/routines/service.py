@@ -177,6 +177,36 @@ async def _pick_with_llm(sampled: list[int], store, query_description: str) -> i
     return sampled[number - 1]
 
 
+def _build_set(
+    slug: str,
+    set_template: dict,
+    kind: str | None,
+    stats: tuple[dict, dict],
+    profile: dict,
+    meta: dict,
+) -> RoutineSetOut:
+    """세트 1개 조립 — 종목 수행 방식(exerciseType)에 따라 채우는 필드가 갈린다.
+
+    루틴 원본은 전부 렙 기반이라 시간 종목이어도 reps가 들어있다. 그 값을 초로 오해해
+    내보내지 않고, 설정된 세트 길이(duration_set_seconds)로 대체한다.
+    """
+    order_index = set_template["order_index"]
+    reps = set_template["reps"]
+
+    if kind == "DURATION":
+        return RoutineSetOut(
+            order_index=order_index,
+            weight=None,
+            reps=None,
+            duration_seconds=get_settings().duration_set_seconds,
+        )
+    if kind == "REPS_ONLY":
+        return RoutineSetOut(order_index=order_index, weight=None, reps=reps, duration_seconds=None)
+
+    weight = domain.recommend_weight(slug, reps, stats, profile, meta)
+    return RoutineSetOut(order_index=order_index, weight=weight, reps=reps, duration_seconds=None)
+
+
 def _build_response(
     routine: dict,
     request: RoutineGenerateRequest,
@@ -184,17 +214,25 @@ def _build_response(
     stats: tuple[dict, dict],
     meta: dict,
 ) -> RoutineOut:
+    settings = get_settings()
     exercises = []
     for exercise in routine.get("exercises", []):
         slug = exercise["slug"]
         equipment = (meta.get(slug) or {}).get("equipment", [])
-        sets = []
-        for set_template in exercise.get("sets", []):
-            reps = set_template["reps"]
-            weight = domain.recommend_weight(slug, reps, stats, profile, meta)
-            sets.append(RoutineSetOut(order_index=set_template["order_index"], weight=weight, reps=reps))
+        # 카탈로그 미스면 None — 종전대로 무게·렙 세트를 만든다
+        kind = exercise_catalog.exercise_type(slug)
+        sets = [
+            _build_set(slug, set_template, kind, stats, profile, meta)
+            for set_template in exercise.get("sets", [])
+        ]
         if request.include_warmup and sets:
-            sets[0].weight = domain.warmup_weight(sets[0].weight, equipment)
+            # 워밍업은 부하를 줄이는 것 — 무게 종목은 무게를, 시간 종목은 시간을 낮춘다
+            if sets[0].duration_seconds is not None:
+                sets[0].duration_seconds = max(
+                    1, int(sets[0].duration_seconds * settings.warmup_duration_factor)
+                )
+            else:
+                sets[0].weight = domain.warmup_weight(sets[0].weight, equipment)
         exercises.append(
             RoutineExerciseOut(
                 exercise_id=exercise_catalog.exercise_id(slug),

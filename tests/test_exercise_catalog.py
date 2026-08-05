@@ -183,3 +183,58 @@ async def test_video_uses_presign_when_catalog_has_no_url(catalog_only, monkeypa
     video = await exercises_service.get_video("push-up")
     assert video["videoUrl"].startswith("https://s3.example/")
     assert video["expiresAt"] is not None
+
+
+def _routine_with(slug: str) -> dict:
+    return {
+        "slug": "r1", "name": "루틴", "minutes_per_routine": 30,
+        "exercises": [{
+            "slug": slug, "exercise_name": "종목", "thumbnail_url": "",
+            "order_index": 0,
+            "sets": [{"order_index": n, "reps": 12} for n in range(2)],
+        }],
+    }
+
+
+@pytest.mark.parametrize("kind,expect", [
+    ("DURATION", {"reps": None, "duration": 30}),      # 플랭크·월싯 — 시간만
+    ("REPS_ONLY", {"reps": 12, "duration": None}),     # 맨몸 스쿼트 — 렙만
+    ("WEIGHT_AND_REPS", {"reps": 12, "duration": None}),
+    (None, {"reps": 12, "duration": None}),            # 카탈로그 미스 — 종전 동작
+])
+def test_set_shape_follows_exercise_type(monkeypatch, kind, expect):
+    from app.routines import service as routines_service
+    from app.routines.schemas import RoutineGenerateRequest
+
+    entry = {"slug": "wall-sit", "exercise_id": "uuid-1"}
+    if kind:
+        entry["exercise_type"] = kind
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {"wall-sit": entry})
+
+    request = RoutineGenerateRequest(
+        level="beginner", muscleGroups=["core"], minutes=30, includeWarmup=False
+    )
+    out = routines_service._build_response(_routine_with("wall-sit"), request, {}, ({}, {}), {})
+    first = out.exercises[0].sets[0]
+    assert first.reps == expect["reps"]
+    assert first.duration_seconds == expect["duration"]
+    if kind == "DURATION":
+        assert first.weight is None   # 시간 종목은 무게도 없다
+
+
+def test_warmup_shortens_duration_instead_of_weight(monkeypatch):
+    # 워밍업 = 부하 낮추기 — 시간 종목은 무게가 없으니 시간을 줄인다
+    from app.routines import service as routines_service
+    from app.routines.schemas import RoutineGenerateRequest
+
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
+        "hand-plank": {"slug": "hand-plank", "exercise_type": "DURATION"}
+    })
+    request = RoutineGenerateRequest(
+        level="beginner", muscleGroups=["core"], minutes=30, includeWarmup=True
+    )
+    sets = routines_service._build_response(
+        _routine_with("hand-plank"), request, {}, ({}, {}), {}
+    ).exercises[0].sets
+    assert sets[0].duration_seconds == 15    # 첫 세트만 절반
+    assert sets[1].duration_seconds == 30

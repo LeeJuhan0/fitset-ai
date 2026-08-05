@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     cosine_top_k: int = 30           # 코사인 상위 N
     llm_candidate_count: int = 5     # LLM 최종 선택 후보 수
     minutes_tolerance: float = 0.2   # 요청 시간 ±20%
+    # 시간 종목(exerciseType=DURATION — 플랭크·월싯 등 8종) 세트 길이.
+    # 종목 metadata의 durationSeconds는 시연 영상 길이(5~10초)라 세트 시간으로 쓸 수 없다
+    duration_set_seconds: int = 30
+    warmup_duration_factor: float = 0.5   # 워밍업 첫 세트 — 시간 종목은 무게 대신 시간을 줄인다
     bodyweight_home_ratio: float = 0.7   # 맨몸 비율 ≥ 70% → 홈트 유저 판정
 
     # 가드레일 — 룰 필터로 표현할 수 없는 안전 제약(동작 패턴·가동범위·질환)이 감지되면 추천을 중단한다.

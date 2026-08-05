@@ -1,7 +1,7 @@
 """종목 카탈로그 저장소 — 백엔드 마스터 캐시(`exercise_catalog`)를 읽는 유일한 곳.
 
-담는 것은 AI 서버가 자체 생성할 수 없는 값뿐이다 — 백엔드 UUID(`exerciseId`)와
-CDN 썸네일·영상 URL. 종목의 나머지 정보(한글명·부위·장비·수행 방법)는 repo 동봉
+담는 것은 AI 서버가 자체 생성할 수 없는 값뿐이다 — 백엔드 UUID(`exerciseId`),
+종목 수행 방식(`exerciseType`), CDN 썸네일·영상 URL. 종목의 나머지 정보(한글명·부위·장비·수행 방법)는 repo 동봉
 metadata(206종)가 정본이므로 중복 저장하지 않는다.
 
 일 1회 배치(scripts/sync_exercise_catalog.py)가 갱신하고 서버는 첫 조회 때 1회 Scan한다
@@ -43,6 +43,11 @@ def get_exercise_catalog() -> dict[str, dict]:
 def exercise_id(slug: str) -> str | None:
     """종목 slug → 백엔드 마스터 UUID. 캐시 미스면 None — 클라가 slug로 매핑 폴백."""
     return (get_exercise_catalog().get(slug) or {}).get("exercise_id")
+
+
+def exercise_type(slug: str) -> str | None:
+    """종목 slug → 수행 방식(WEIGHT_AND_REPS·REPS_ONLY·DURATION). 미스면 None(무게·렙 기본)."""
+    return (get_exercise_catalog().get(slug) or {}).get("exercise_type")
 
 
 def cdn_video_url(slug: str) -> str | None:
