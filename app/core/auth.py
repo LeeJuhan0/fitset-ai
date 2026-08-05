@@ -1,7 +1,9 @@
 """JWT RS256 검증 — 비즈니스 규칙 §9 인증 규약 + AI 서버 JWKS 검증 가이드(2026-08-04).
 
 ELB는 TLS 종료만 하므로 이 서버가 직접 검증한다:
-JWKS 공개키(kid 매칭) → ① RS256 서명 → ② exp → ③ type == "access" → ④ sub = userId.
+JWKS 공개키(kid 매칭) → ① RS256 서명 → ② exp → ③ sub = userId.
+type 클레임 검사는 없다 — 백엔드 refresh 토큰은 JWT가 아닌 불투명 랜덤 문자열이라
+(fitset-api RefreshTokenGenerator, 2026-08-05 확인) 서명 검증 자체를 통과할 수 없다.
 개인키는 백엔드만 보유 — 여기는 공개키 검증 전용이라 SSM·KMS 권한이 필요 없다.
 
 키 로테이션은 무설정 대응 — 캐시에 없는 kid가 오면 PyJWKClient가 JWKS를 재조회한다.
@@ -53,6 +55,4 @@ def verify_token(token: str) -> str:
         )
     except jwt.PyJWTError as exc:
         raise UnauthorizedError("유효하지 않은 토큰입니다.") from exc
-    if payload.get("type") != "access":
-        raise UnauthorizedError("access 토큰이 아닙니다.")
     return payload["sub"]

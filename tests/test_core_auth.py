@@ -20,8 +20,8 @@ _OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
 def _token(key=_PRIVATE_KEY, **overrides) -> str:
-    """유효한 access 토큰을 기본으로 만들고 overrides로 클레임을 비틀어 깨뜨린다."""
-    claims = {"sub": "user-1", "type": "access", "exp": int(time.time()) + 60}
+    """유효한 access 토큰(sub·exp — 백엔드 실물과 동일)을 만들고 overrides로 비틀어 깨뜨린다."""
+    claims = {"sub": "user-1", "exp": int(time.time()) + 60}
     claims.update(overrides)
     claims = {name: value for name, value in claims.items() if value is not None}
     return jwt.encode(claims, key, algorithm="RS256", headers={"kid": "test-kid"})
@@ -65,15 +65,10 @@ def test_missing_sub_rejected(pem_mode):
         auth.verify_token(_token(sub=None))
 
 
-def test_non_access_type_rejected(pem_mode):
-    # refresh 토큰이 access처럼 통하면 안 된다 — type 검사 유지 중 (백엔드 확인 전)
-    with pytest.raises(UnauthorizedError):
-        auth.verify_token(_token(type="refresh"))
-    with pytest.raises(UnauthorizedError):
-        auth.verify_token(_token(type=None))
-
-
 def test_garbage_token_rejected(pem_mode):
+    # 백엔드 refresh 토큰(랜덤 문자열)도 이 경로로 걸린다 — JWT 형식이 아니라 서명 검증 불가
+    with pytest.raises(UnauthorizedError):
+        auth.verify_token("h2Kk91_random_opaque_refresh_token")
     with pytest.raises(UnauthorizedError):
         auth.verify_token("not-a-token")
 

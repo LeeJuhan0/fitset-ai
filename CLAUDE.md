@@ -49,7 +49,7 @@
 | `iss`·`aud` | 없음 — 검증 라이브러리의 issuer·audience 검증을 켜면 안 된다 |
 
 - 검증 절차: ① 토큰 헤더 kid로 JWKS 공개키 조회 → ② RS256 서명 검증 → ③ `exp` 만료 확인 → ④ `sub`를 userId로 사용.
-- `type == "access"` 검사는 코드에 유지 중 — JWKS 가이드 문서의 토큰 구조에는 `type` 클레임이 없어 백엔드에 의도 확인 중(2026-08-04). 신규 토큰에 type이 없다고 확정되면 검사를 제거한다(tests/test_core_auth.py의 type 테스트 포함).
+- `type` 클레임 검사는 없다(2026-08-05 확정, 구 §9 규약에서 변경) — 백엔드 refresh 토큰은 JWT가 아닌 불투명 랜덤 문자열(fitset-api `RefreshTokenGenerator`, SecureRandom 32바이트)이라 서명 검증 자체를 통과할 수 없어 access와 혼동될 경로가 없다.
 - JWKS 조회 실패는 토큰 문제가 아니므로 401이 아닌 500(INTERNAL_ERROR)으로 구분한다.
 
 ## 현재 구현 범위 (2026-07-25)
