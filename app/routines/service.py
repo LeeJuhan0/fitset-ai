@@ -189,6 +189,8 @@ def _build_set(
 
     루틴 원본은 전부 렙 기반이라 시간 종목이어도 reps가 들어있다. 그 값을 초로 오해해
     내보내지 않고, 설정된 세트 길이(duration_set_seconds)로 대체한다.
+
+    세 필드는 not null이고 해당 없는 자리는 0으로 채운다 — 클라가 null 분기를 하지 않도록.
     """
     order_index = set_template["order_index"]
     reps = set_template["reps"]
@@ -196,15 +198,16 @@ def _build_set(
     if kind == "DURATION":
         return RoutineSetOut(
             order_index=order_index,
-            weight=None,
-            reps=None,
+            weight=0,
+            reps=0,
             duration_seconds=get_settings().duration_set_seconds,
         )
     if kind == "REPS_ONLY":
-        return RoutineSetOut(order_index=order_index, weight=None, reps=reps, duration_seconds=None)
+        return RoutineSetOut(order_index=order_index, weight=0, reps=reps, duration_seconds=0)
 
-    weight = domain.recommend_weight(slug, reps, stats, profile, meta)
-    return RoutineSetOut(order_index=order_index, weight=weight, reps=reps, duration_seconds=None)
+    # 맨몸 종목은 추천 무게가 없다(None) — 0으로 채운다
+    weight = domain.recommend_weight(slug, reps, stats, profile, meta) or 0
+    return RoutineSetOut(order_index=order_index, weight=weight, reps=reps, duration_seconds=0)
 
 
 def _build_response(
@@ -226,13 +229,13 @@ def _build_response(
             for set_template in exercise.get("sets", [])
         ]
         if request.include_warmup and sets:
-            # 워밍업은 부하를 줄이는 것 — 무게 종목은 무게를, 시간 종목은 시간을 낮춘다
-            if sets[0].duration_seconds is not None:
+            # 워밍업은 부하를 줄이는 것 — 시간 종목은 시간을, 나머지는 무게를 낮춘다
+            if sets[0].duration_seconds:
                 sets[0].duration_seconds = max(
                     1, int(sets[0].duration_seconds * settings.warmup_duration_factor)
                 )
             else:
-                sets[0].weight = domain.warmup_weight(sets[0].weight, equipment)
+                sets[0].weight = domain.warmup_weight(sets[0].weight, equipment) or 0
         exercises.append(
             RoutineExerciseOut(
                 exercise_id=exercise_catalog.exercise_id(slug),

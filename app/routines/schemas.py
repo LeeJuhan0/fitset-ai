@@ -27,14 +27,15 @@ class RoutineGenerateRequest(CamelModel):
 class RoutineSetOut(CamelModel):
     """세트 1개 — 종목 수행 방식(exerciseType)에 따라 채워지는 필드가 갈린다 (2026-08-05).
 
-    WEIGHT_AND_REPS: weight + reps · REPS_ONLY: reps만 · DURATION: durationSeconds만.
-    백엔드 저장 API(`InnerSetRequest`)도 세 필드가 모두 선택이라 그대로 실어 보낼 수 있다.
+    WEIGHT_AND_REPS: weight + reps · REPS_ONLY: reps · DURATION: durationSeconds.
+    **세 필드 모두 not null이고, 해당 없는 자리는 0이다** — 클라가 null 분기 없이
+    0으로 판별하도록(2026-08-05 확정). 백엔드 저장 DTO도 세 필드가 모두 선택이라 그대로 실린다.
     """
 
     order_index: int
-    weight: float | None            # kg — 맨몸·시간 종목은 null
-    reps: int | None                # 시간 종목(플랭크·월싯 등)은 null
-    duration_seconds: int | None    # 시간 종목만 값 — 그 외 null
+    weight: float   # kg — 맨몸·시간 종목은 0
+    reps: int       # 시간 종목(플랭크·월싯 등)은 0
+    duration_seconds: int   # 시간 종목만 값 — 그 외 0
 
 
 class RoutineExerciseOut(CamelModel):

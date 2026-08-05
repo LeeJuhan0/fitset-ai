@@ -131,6 +131,7 @@ def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
     out = routines_service._build_response(routine, request, {}, ({}, {}), {})
     assert out.exercises[0].exercise_id is None
     assert "s3.amazonaws.com" in out.exercises[0].thumbnail_url
+    assert out.exercises[0].sets[0].weight == 0   # 맨몸·추천 불가 — null 아닌 0
 
 
 @pytest.fixture
@@ -197,10 +198,10 @@ def _routine_with(slug: str) -> dict:
 
 
 @pytest.mark.parametrize("kind,expect", [
-    ("DURATION", {"reps": None, "duration": 30}),      # 플랭크·월싯 — 시간만
-    ("REPS_ONLY", {"reps": 12, "duration": None}),     # 맨몸 스쿼트 — 렙만
-    ("WEIGHT_AND_REPS", {"reps": 12, "duration": None}),
-    (None, {"reps": 12, "duration": None}),            # 카탈로그 미스 — 종전 동작
+    ("DURATION", {"reps": 0, "duration": 30}),      # 플랭크·월싯 — 시간만, 나머지 0
+    ("REPS_ONLY", {"reps": 12, "duration": 0}),     # 맨몸 스쿼트 — 렙만
+    ("WEIGHT_AND_REPS", {"reps": 12, "duration": 0}),
+    (None, {"reps": 12, "duration": 0}),            # 카탈로그 미스 — 종전 동작
 ])
 def test_set_shape_follows_exercise_type(monkeypatch, kind, expect):
     from app.routines import service as routines_service
@@ -219,7 +220,9 @@ def test_set_shape_follows_exercise_type(monkeypatch, kind, expect):
     assert first.reps == expect["reps"]
     assert first.duration_seconds == expect["duration"]
     if kind == "DURATION":
-        assert first.weight is None   # 시간 종목은 무게도 없다
+        assert first.weight == 0   # 시간 종목은 무게도 0 (null 아님)
+    # 세 필드 모두 not null — 클라가 null 분기를 하지 않는다
+    assert None not in (first.weight, first.reps, first.duration_seconds)
 
 
 def test_warmup_shortens_duration_instead_of_weight(monkeypatch):
