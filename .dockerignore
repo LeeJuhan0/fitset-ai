@@ -4,5 +4,7 @@ __pycache__
 *.pyc
 tests/
 docs/
+# scripts는 이미지에서 제외하되, EventBridge 배치(ECS RunTask)가 쓰는 동기화 스크립트만 포함
 scripts/
+!scripts/sync_exercise_catalog.py
 .env
