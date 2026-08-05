@@ -75,6 +75,12 @@ def get_routines_table():
 
 
 @lru_cache
+def get_exercise_catalog_table():
+    """`exercise_catalog` 테이블 핸들 (PK=slug — 백엔드 종목 마스터 캐시, 일 1회 배치 갱신)."""
+    return _resource().Table(get_settings().exercise_catalog_table)
+
+
+@lru_cache
 def get_chat_threads_table():
     """`chat_threads` 테이블 핸들 (PK=user_id, SK=thread_id, TTL 속성=expires_at)."""
     return _resource().Table(get_settings().chat_threads_table)

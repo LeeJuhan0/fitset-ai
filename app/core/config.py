@@ -21,11 +21,16 @@ class Settings(BaseSettings):
     # 종목 마스터 (206종, repo 동봉)
     exercise_metadata_path: str = "data/exercise-metadata.ko.json"
 
-    # 운동 가이드 영상 (비공개 S3) — 재생 URL은 요청 시점에 presigned GET으로 서명한다
+    # 종목 카탈로그 — 백엔드 공개 API를 일 1회 배치로 캐시(scripts/sync_exercise_catalog.py).
+    # UUID(exerciseId)·CDN 썸네일·영상 URL의 정본은 백엔드 마스터뿐이라 여기로 들여온다
+    exercise_catalog_table: str = "exercise_catalog"
+    backend_exercises_url: str = "https://api.fitset.kro.kr/api/v1/exercises"   # 공개 API(무인증, 2026-08-05 실측)
+
+    # 운동 가이드 영상 — 1순위는 카탈로그의 CDN URL(무기한·무서명), 실패 시 presigned GET 폴백.
     # 실제 업로드 위치 기준 (fitset-media 버킷은 미생성 — 2026-08-03 실측)
     exercise_video_bucket: str = "fitset-exercise-media"
     exercise_video_key_template: str = "videos/{slug}.mp4"   # 내부 API videoKey 미제공 시 폴백
-    presign_expires_seconds: int = 3600   # 1시간 — 클라는 만료 시 §6-B로 재발급
+    presign_expires_seconds: int = 3600   # 1시간 — 폴백 URL에만 적용, 클라는 만료 시 §6-B로 재발급
 
     # 백엔드 내부 API (스프링)
     spring_internal_base_url: str = "http://localhost:8080/internal"
