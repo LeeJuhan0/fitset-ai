@@ -1,6 +1,6 @@
 # AI 챗봇 데이터 설계 — ERD & JSON 규약
 
-저장소: **DynamoDB 온디맨드** (chat_threads, chat_messages, user_summaries, routines) — 2026-07-25 확정.
+저장소: **DynamoDB 온디맨드** (chat_threads, chat_messages, user_summaries, routines, exercise_catalog) — 2026-07-25 확정, 카탈로그는 2026-08-05 추가.
 루틴 파이프라인: **S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본) → 부팅 시 Scan 전량 인메모리 로드**(~110MB).
 룰 필터 검색은 항상 인메모리 — DynamoDB `routines`는 부팅 로드 소스 + slug 단건 폴백(GetItem) 전용.
 벡터 검색은 제거 — 루틴 추천은 **룰 필터 + LLM 리랭킹**.
@@ -100,6 +100,25 @@ Table routines {
   '''
 }
 
+Table exercise_catalog {
+  slug varchar [pk, note: 'Partition Key (SK 없음) — 종목 마스터 조인 키, 배치 멱등 PutItem 키']
+  exercise_id uuid [note: '백엔드 종목 마스터 UUID — 클라 루틴 저장(POST /api/v1/routines)·종목 상세 이동 키']
+  exercise_type varchar [note: 'WEIGHT_AND_REPS(166) | REPS_ONLY(32) | DURATION(8) — 세트 구성 분기 키']
+  thumbnail_url varchar [note: 'CloudFront CDN 썸네일 — 종전 S3 직접 주소는 403이라 폐기(2026-08-05 실측)']
+  video_url varchar [note: 'CloudFront CDN 가이드 영상 — 무서명·무기한. 미보유 종목은 속성 없음(presign 폴백)']
+
+  Note: '''
+  종목 카탈로그 — 백엔드 종목 마스터의 파생 캐시 (온디맨드, TTL 없음, 2026-08-05 신설)
+  - 출처: 백엔드 공개 API GET /api/v1/exercises (무인증 200 실측) —
+    EventBridge Scheduler(03:00 KST, Asia/Seoul)가 ECS RunTask로 배치 실행
+    (scripts/sync_exercise_catalog.py — slug ∩ 로컬 metadata 206종 교집합만 적재)
+  - 담는 것은 AI 서버가 자체 생성 못 하는 값뿐 — UUID·수행 방식·CDN URL.
+    한글명·부위·장비는 repo 동봉 metadata가 정본이라 중복 저장하지 않는다
+  - 서버는 부팅 시 Scan 인메모리(206건) — 배치가 갱신해도 재시작 전까지 미반영(F16과 동일)
+  - 비어 있어도 서버 정상 — exerciseId null·영상 presign 폴백으로 강등
+  '''
+}
+
 Table s3_routines {
   slug varchar [pk, note: 'S3 키에 포함 (예: routines/{slug}.json, 버킷 fitset-routines-raw)']
   body json [note: '루틴 전문(캐글 원문 보존): 운동 목록, 세트/렙, 설명, 장비, 종목 slug 참조 등']
@@ -113,6 +132,7 @@ Table s3_routines {
 
 Ref: chat_threads.thread_id < chat_messages.thread_id [note: '논리적 1:N (FK 아님 — 코드 규약)']
 Ref: routines.slug - s3_routines.slug [note: '1:1 — 변환 배치가 동기화 책임']
+Ref: exercise_catalog.slug - routines.slug [note: '논리적 참조 — 응답 조립 시 slug로 UUID·CDN URL·exerciseType을 붙인다 (FK 아님)']
 ```
 
 ## 2. `payload` JSON 규약 (response_scheme별)
@@ -145,12 +165,17 @@ payload는 항상 `null`. 유저 메시지는 항상 이 형태.
 
 ```json
 {
+  "exerciseId": "11f18f47-… — 백엔드 마스터 UUID, 카탈로그 미스 시 null",
   "slug": "barbell-bench-press — 종목 마스터 참조",
-  "exercise_name": "바벨 벤치프레스"
+  "exerciseName": "바벨 벤치프레스",
+  "videoUrl": "https://dtcevtkuvdwt9.cloudfront.net/videos/….mp4 — CDN, 무기한",
+  "expiresAt": null
 }
 ```
 
-- GIF는 payload에 없음 — 클라가 종목 상세에서 획득
+- `videoUrl`은 CDN이라 만료가 없다(`expiresAt` null) — 저장된 대화를 나중에 열어도 그대로 재생 (2026-08-05, 종전 presign 방식 폐기)
+- presign 폴백(카탈로그 미보유·CDN 재생 실패)일 때만 `expiresAt`에 ISO 시각 — 클라는 §6-B `fallback=true`로 재발급
+- 영상 없는 종목은 `videoUrl`·`expiresAt` 모두 null
 
 ### 2.4 `routine`
 
@@ -158,24 +183,25 @@ payload는 항상 `null`. 유저 메시지는 항상 이 형태.
 {
   "slug": "upper-body-dumbbell-30",
   "name": "상체 덤벨 30분",
-  "minutes_per_routine": 30,
+  "estimatedMinutes": 30,
   "exercises": [
     {
+      "exerciseId": "11f18f47-… — 백엔드 마스터 UUID, 카탈로그 미스 시 null",
       "slug": "dumbbell-bench-press",
-      "exercise_name": "덤벨 벤치프레스",
-      "thumbnail_url": "varchar(500)",
-      "order_index": 0,
+      "exerciseName": "덤벨 벤치프레스",
+      "thumbnailUrl": "CDN URL (varchar 500)",
+      "orderIndex": 0,
       "sets": [
-        { "order_index": 0, "weight": 20.0, "reps": 12 }
+        { "orderIndex": 0, "weight": 20.0, "reps": 12, "durationSeconds": 0 }
       ]
     }
   ]
 }
 ```
 
-- `exercises`는 `routines.exercises`(§3)와 동일 구조
-- `slug`: `routines._id` 참조. 영상은 안드로이드 로컬 DB에서 클라가 조회
-- 미결: 첫 번째 운동을 루틴 썸네일로 쓴다면 `slug` 불필요할 수 있음
+- 클라이언트 API §4.1 `data.routine`과 동일 구조 — 추천 시점 스냅샷 (API 응답을 그대로 저장, 와이어 camelCase)
+- 세트 3필드는 not null — exerciseType별로 해당 없는 자리는 `0` (WEIGHT_AND_REPS: weight+reps / REPS_ONLY: reps / DURATION: durationSeconds, 2026-08-05)
+- `exerciseId`·CDN `thumbnailUrl`은 응답 조립 시 `exercise_catalog`에서 붙인다 — `routines.exercises`(§3) 저장분에는 없다
 
 ## 3. `routines.exercises` 구조
 
@@ -201,7 +227,7 @@ payload는 항상 `null`. 유저 메시지는 항상 이 형태.
 
 ## 4. 전역 규칙
 
-1. payload에는 식별자만 저장 (slug) — URL·미디어는 클라가 조회 시점에 획득 (단, routine payload의 `thumbnail_url`은 예외로 스냅샷 포함)
+1. payload에는 식별자만 저장 (slug) — 만료가 있는 URL은 저장하지 않는다. **CDN URL(무기한)은 예외로 스냅샷 포함** (routine `thumbnailUrl`, exercise_gif `videoUrl` — 2026-08-05 CDN 전환으로 저장 가능해짐)
 2. 시각은 ISO 8601 문자열, 식별자는 ULID — 사전순 = 시간순이므로 Sort Key 정렬 기준 겸용 (ObjectId 내장 시각 대체)
 3. enum 어휘 강제는 Pydantic — DynamoDB는 검증하지 않는다
 4. 클라는 모르는 `response_scheme`/`chart_type` 무시 또는 텍스트 폴백 (전방 호환)
