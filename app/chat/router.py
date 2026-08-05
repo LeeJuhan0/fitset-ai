@@ -17,6 +17,7 @@ from app.chat import service
 from app.chat.schemas import (
     MessagePageData,
     MessageSendRequest,
+    MessageStreamEvent,
     ThreadCreated,
     ThreadOut,
 )
@@ -89,7 +90,45 @@ def _sse_frame(kind: str, value, trace_id: str) -> str:
     return f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/threads/{threadId}/messages")
+class SseResponse(StreamingResponse):
+    """media_type이 고정된 스트리밍 응답 — OpenAPI가 스키마를 이 미디어 타입에 매단다.
+
+    FastAPI는 response_class.media_type을 응답 스키마의 키로 쓴다. 기본 StreamingResponse는
+    media_type이 없어 application/json으로 문서화되므로, SSE임을 문서에도 드러내려고 고정한다.
+    """
+
+    media_type = "text/event-stream"
+
+
+# 스트리밍 응답이라 response_model로 표현할 수 없다 — Swagger에 이벤트 스키마가 비지 않게
+# responses로 직접 문서화한다(모델은 MessageStreamEvent, 예시는 실제 와이어 형식)
+_SSE_EXAMPLE = (
+    'event: delta\ndata: {"text":"스쿼트를 빼고"}\n\n'
+    'event: delta\ndata: {"text":" 레그프레스로 대체했어요."}\n\n'
+    ':ping\n\n'
+    'event: done\ndata: {"message":{"messageId":"01J...","role":"assistant",'
+    '"content":"스쿼트를 빼고 레그프레스로 대체했어요.","responseScheme":"routine",'
+    '"payload":{"slug":"...","exercises":[{"exerciseId":"11f1...","slug":"barbell-squat"}]},'
+    '"createdAt":"2026-08-05T09:01:00Z"},"threadTitle":"하체 루틴 조정"}\n\n'
+)
+_SSE_RESPONSES = {
+    200: {
+        "model": MessageStreamEvent,
+        "description": (
+            "SSE 스트림 (text/event-stream). 이벤트 3종 — "
+            "`delta`(본문 증분), `done`(정본 · payload는 여기에만), `error`(시작 후 실패). "
+            "무토큰 구간에는 하트비트 코멘트(`:ping`)가 온다. traceId는 X-Trace-Id 헤더."
+        ),
+        "content": {"text/event-stream": {"example": _SSE_EXAMPLE}},
+    },
+}
+
+
+@router.post(
+    "/threads/{threadId}/messages",
+    response_class=SseResponse,
+    responses=_SSE_RESPONSES,
+)
 async def send_message(
     request_body: MessageSendRequest,
     background_tasks: BackgroundTasks,
@@ -124,9 +163,8 @@ async def send_message(
                 return
 
     background_tasks.add_task(service.refresh_summaries, user_id, thread_id)
-    return StreamingResponse(
+    return SseResponse(
         sse_body(),
-        media_type="text/event-stream",
         # 중간 프록시 버퍼링 금지 — 조각이 모여서 한 번에 가면 스트리밍이 무의미하다
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         background=background_tasks,

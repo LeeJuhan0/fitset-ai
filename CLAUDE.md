@@ -134,7 +134,7 @@
 
 ### 운동명 (EXERCISE, slug ↔ 한글명 206종)
 
-종목 식별자는 **slug**, 이름은 **한글명**(metadata `name_ko`)을 쓴다 — **필드명도 `slug`로 통일**(`exerciseId`/`exercise_id` 표기 미사용), 이름 필드는 한글명 (2026-07-25 확정).
+종목 식별은 **이중 체계**다 (2026-08-05 개정). AI 서버 내부·서버 간 참조는 **slug**, 클라가 백엔드 공개 API(루틴 저장·종목 상세)를 부를 때 쓰는 **백엔드 마스터 UUID는 `exerciseId`** — 클라로 나가는 payload에 둘 다 싣는다. UUID·CDN 썸네일·영상 URL의 정본은 백엔드 마스터뿐이라 **일 1회 배치(`scripts/sync_exercise_catalog.py`)가 공개 API `GET /api/v1/exercises`를 DynamoDB `exercise_catalog`(PK=slug)로 캐시**하고, 서버는 첫 조회 때 Scan해 인메모리로 든다(206종 1:1 조인 확인). 캐시가 비어도 서버는 돈다 — `exerciseId`는 null, 영상은 presign 폴백으로 강등. 이름은 **한글명**(metadata `name_ko`).
 정본 파일: `~/Downloads/metadata.ko (1).json` (영문 metadata.json + `*_ko` 한글 필드 확장판, slug 동일).
 
 slug는 대체로 `{장비}-{동작}` 패턴이지만 **영문명 slugify와 일치하지 않는 예외**가 있으므로 이름에서 slug를 기계적으로 역산하지 말 것:

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel
+from app.core.schemas import CamelModel, ErrorResponse
 
 Role = Literal["user", "assistant"]
 ResponseScheme = Literal["text", "chart", "exerciseGif", "routine"]
@@ -44,5 +44,25 @@ class MessageSendRequest(CamelModel):
 
 
 class MessageSendData(CamelModel):
+    """SSE `done` 이벤트의 data — 스트림 정본 (§4.6 규약 1)."""
+
     message: MessageOut
     thread_title: str | None   # 제목 생성·변경 시에만 값 — 목록 화면 갱신용
+
+
+class MessageDeltaData(CamelModel):
+    """SSE `delta` 이벤트의 data — 답변 본문 증분. 이어 붙이면 본문이 된다."""
+
+    text: str
+
+
+class MessageStreamEvent(CamelModel):
+    """SSE 이벤트 3종의 문서화용 합집합 — 실제 와이어는 `event:`/`data:` 라인이다.
+
+    스트리밍 응답이라 response_model로 표현할 수 없어 OpenAPI 문서화 전용으로 둔다
+    (라우터 responses=). 클라는 event 이름으로 분기하고 data를 아래 타입으로 파싱한다.
+    """
+
+    delta: MessageDeltaData | None = None    # event: delta
+    done: MessageSendData | None = None      # event: done — payload는 여기에만 실린다
+    error: ErrorResponse | None = None       # event: error — 스트림 시작 후 실패

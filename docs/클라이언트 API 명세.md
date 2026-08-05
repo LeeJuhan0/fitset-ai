@@ -49,9 +49,10 @@
   "estimatedMinutes": 50,
   "exercises": [
     {
-      "slug": "dumbbell-bench-press",   // 종목 식별자 = slug (uuid 미사용, 2026-07-25 확정)
+      "exerciseId": "11f18f47-4f8b-12f2-8072-021f94ad3563",  // 백엔드 마스터 UUID — 클라 저장(POST /api/v1/routines)·종목 상세 이동 키 (카탈로그 미스 시 null)
+      "slug": "dumbbell-bench-press",   // AI 서버 내부 식별자 — 가이드·영상 호출 키
       "exerciseName": "덤벨 벤치프레스",  // 한글명 (종목 마스터 name_ko)
-      "thumbnailUrl": "https://cdn.fitset.example/exercises/dumbbell-bench-press/thumb.jpg",  // 최대 500자, 미등록 null
+      "thumbnailUrl": "https://dtcevtkuvdwt9.cloudfront.net/thumbnails/dumbbell-bench-press.webp",  // CDN URL (2026-08-05 — S3 직접 주소는 403이라 폐기)
       "orderIndex": 0,
       "sets": [ { "orderIndex": 0, "weight": 12.0, "reps": 15 } ]
     }
@@ -64,7 +65,7 @@
 1. 프로필 `avoidBodyParts`는 하드 필터로 적용하되 **요청 `muscleGroups`와 겹치는 부위는 클라 요청 우선**(실효 기피 = `avoidBodyParts − muscleGroups`, 2026-07-25 확정). 기피(제외) 정보는 **요청 필드가 아니라 내부 API 프로필 조회값**이며 `null`(미설정)일 수 있음 — 비즈니스 규칙 §5의 "제외 운동"은 이 경로로 흡수
 2. 세트 `weight`는 최근 기록 기반 무게 추천값, 기록 없으면 신체 정보 기반 초기값. 맨몸은 `null`
 3. 파이프라인: 후보 룰 필터 → 룰 점수 정렬 → LLM 최종 구성
-4. `exercises[]`는 04 명세 루틴 구조와 호환 — 클라가 그대로 백엔드 `POST /routines`(루틴 저장)에 사용. AI 서버는 쓰기 없음
+4. 루틴 저장은 클라가 `exercises[].exerciseId`(UUID)로 백엔드 `POST /api/v1/routines`(`RoutineCommitRequest` — exerciseId 필수)를 조립한다. 값은 백엔드 종목 마스터를 일 1회 배치로 캐시한 것(`exercise_catalog`) — 캐시 미스면 `null`이고 클라가 자체 종목 마스터로 매핑 폴백. AI 서버는 쓰기 없음
 5. **goal은 요청 필드가 아니다** (2026-07-29 확정) — 내부 API 프로필(08 §4.1 `data.goal`)을 쓴다. 프로필 미입력(`null`)이면 `hypertrophy` 기본(기본값 처리는 AI 서버 책임 — 08 §4.1 규약). 홈 화면은 목적 선택 UI를 두지 않는다
 
 오류: 400 `INVALID_REQUEST` / 401 / 404 `USER_NOT_FOUND` / 409 `NO_ROUTINE_CANDIDATE` / 429 `RATE_LIMITED` (유저별 분당 상한, 2026-07-29) / 503 `AI_UNAVAILABLE`
@@ -158,13 +159,14 @@ data: {"message":{"messageId":"oid","role":"assistant","content":"...","response
 
 ## 6-B. GET /ai/v1/exercises/{slug}/video
 
-운동 가이드 영상의 **presigned URL 재발급**. `exerciseGif` payload의 URL이 만료됐을 때 클라가 호출한다.
+가이드 영상 재생 URL 조회. **기본은 CDN URL(만료 없음)**, CDN 재생이 실패할 때만 `fallback=true`로 presigned URL을 받는다 (2026-08-05 개정).
 
-Path Parameter:
+Parameter:
 
-| 이름 | 타입 | 필수 | 설명 |
+| 이름 | 위치 | 필수 | 설명 |
 | --- | --- | --- | --- |
-| `slug` | String | Y | 종목 식별자 — payload의 `slug` 그대로 |
+| `slug` | path | Y | 종목 식별자 — payload의 `slug` 그대로 |
+| `fallback` | query | N | 기본 `false`. `true`면 CDN을 건너뛰고 비공개 버킷 presigned URL(1시간)을 발급 |
 
 요청 본문 없음. 응답:
 
@@ -172,16 +174,19 @@ Path Parameter:
 {
   "traceId": "01JXYZ",
   "data": {
+    "exerciseId": "11f18f47-4f8b-12f2-8072-021f94ad3563",
     "slug": "barbell-bench-press",
     "exerciseName": "바벨 벤치프레스",
-    "videoUrl": "https://fitset-media.s3.ap-northeast-2.amazonaws.com/exercises/...?X-Amz-Signature=...",
-    "expiresAt": "2026-07-29T12:20:00Z"
+    "videoUrl": "https://dtcevtkuvdwt9.cloudfront.net/videos/barbell-bench-press.mp4",
+    "expiresAt": null
   }
 }
 ```
 
 - 응답 구조는 `exerciseGif` payload와 **동일** — 클라가 payload 자리에 그대로 갈아끼울 수 있다
-- 서명만 새로 만드는 호출이라 LLM을 타지 않는다. 30s 타임아웃 권장 대상 아님
+- **`expiresAt`이 `null`이면 CDN URL** — 만료가 없어 저장된 대화를 다시 열어도 그대로 재생된다(재발급 호출 불필요). 값이 있으면 presigned URL이고 그 시각 이후 403
+- CDN URL로 재생이 안 될 때만 `?fallback=true`로 재요청한다. 카탈로그에 영상이 없는 종목은 fallback 없이도 자동으로 presigned URL이 나간다
+- 서명·조회뿐이라 LLM을 타지 않는다. 30s 타임아웃 권장 대상 아님
 - 스레드·메시지와 무관한 종목 단위 조회지만, 액세스 토큰 인증은 동일하게 요구한다
 - 오류: 401 / 404 `EXERCISE_NOT_FOUND`(없는 slug) / 404 `VIDEO_NOT_FOUND`(종목은 있으나 영상 미등록)
 
@@ -200,10 +205,11 @@ exerciseGif payload:
 
 ```json
 {
+  "exerciseId": "11f18f47-4f8b-12f2-8072-021f94ad3563",
   "slug": "barbell-bench-press",
   "exerciseName": "바벨 벤치프레스",
-  "videoUrl": "https://fitset-media.s3.ap-northeast-2.amazonaws.com/exercises/barbell-bench-press/guide.mp4?X-Amz-Signature=...",
-  "expiresAt": "2026-07-29T11:20:00Z"
+  "videoUrl": "https://dtcevtkuvdwt9.cloudfront.net/videos/barbell-bench-press.mp4",
+  "expiresAt": null
 }
 ```
 
