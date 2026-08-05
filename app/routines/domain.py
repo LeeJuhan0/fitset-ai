@@ -39,6 +39,22 @@ E1RM_MAX_REPS = 12       # Epley 오차가 커지는 고렙 세트는 e1RM 계�
 CROSS_EXERCISE_FACTOR = 0.8   # B 계층 — 종목 간 전이 안전 계수
 WARMUP_FACTOR = 0.5
 
+# 시간 종목(exerciseType=DURATION) 세트 길이 — 원본 캐글 루틴이 플랭크마저 "10회"처럼
+# 렙으로 인코딩해 시간 값이 없다(2026-08-05 실측). 그 숫자는 초가 아니므로 버리고
+# 종목 특성 × 난이도로 정한다 (협의 포인트 ⑪ — 기획 확정 시 값만 조정).
+DURATION_BASE_SECONDS = {
+    "hand-plank": 30,                # 표준 플랭크 — 30초가 통용 기준
+    "elbow-side-plank": 25,          # 사이드는 좌우 각각이라 짧게
+    "wall-sit": 45,                  # 등척성 하체 — 더 길게 버틴다
+    "kettlebell-farmers-carry": 40,  # 캐리 — 거리·시간 종목
+    "abdominals-stretch-variation-one": 20,     # 스트레칭 4종 — 정적 유지라 20초
+    "abdominals-stretch-variation-two": 20,
+    "abdominals-stretch-variation-three": 20,
+    "abdominals-stretch-variation-four": 20,
+}
+DURATION_LEVEL_FACTOR = {"beginner": 0.7, "intermediate": 1.0, "advanced": 1.3}
+DURATION_STEP_SECONDS = 5   # 표시 단위 — 21초 같은 어중간한 값을 내보내지 않는다
+
 
 def pattern_group(meta: dict) -> str:
     """종목 metadata의 movementPattern·주동근으로 무게 추천 패턴 그룹을 정한다."""
@@ -195,6 +211,17 @@ def recommend_weight(
             e1rm = body_weight * ratio * LEVEL_FACTOR.get(level, 1.0) * GOAL_FACTOR.get(goal, 1.0)
 
     return round_weight(weight_for_reps(e1rm, target_reps), meta.get("equipment", []))
+
+
+def set_duration_seconds(slug: str, level: str, fallback: int) -> int:
+    """시간 종목 세트 길이 — 종목 기본값 × 난이도 계수, 표시 단위로 반올림.
+
+    카탈로그에 없는 신규 시간 종목은 설정 기본값(fallback)을 쓴다.
+    """
+    base = DURATION_BASE_SECONDS.get(slug, fallback)
+    scaled = base * DURATION_LEVEL_FACTOR.get(level, 1.0)
+    stepped = round(scaled / DURATION_STEP_SECONDS) * DURATION_STEP_SECONDS
+    return max(DURATION_STEP_SECONDS, int(stepped))
 
 
 def warmup_weight(weight: float | None, equipment: list[str]) -> float | None:

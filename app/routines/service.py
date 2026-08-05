@@ -181,6 +181,7 @@ def _build_set(
     slug: str,
     set_template: dict,
     kind: str | None,
+    level: str,
     stats: tuple[dict, dict],
     profile: dict,
     meta: dict,
@@ -200,7 +201,10 @@ def _build_set(
             order_index=order_index,
             weight=0,
             reps=0,
-            duration_seconds=get_settings().duration_set_seconds,
+            # 종목 특성 × 요청 난이도 — 원본 렙 값은 초가 아니라 버린다
+            duration_seconds=domain.set_duration_seconds(
+                slug, level, get_settings().duration_set_seconds
+            ),
         )
     if kind == "REPS_ONLY":
         return RoutineSetOut(order_index=order_index, weight=0, reps=reps, duration_seconds=0)
@@ -225,7 +229,7 @@ def _build_response(
         # 카탈로그 미스면 None — 종전대로 무게·렙 세트를 만든다
         kind = exercise_catalog.exercise_type(slug)
         sets = [
-            _build_set(slug, set_template, kind, stats, profile, meta)
+            _build_set(slug, set_template, kind, request.level, stats, profile, meta)
             for set_template in exercise.get("sets", [])
         ]
         if request.include_warmup and sets:

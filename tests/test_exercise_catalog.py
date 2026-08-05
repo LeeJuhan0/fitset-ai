@@ -239,5 +239,44 @@ def test_warmup_shortens_duration_instead_of_weight(monkeypatch):
     sets = routines_service._build_response(
         _routine_with("hand-plank"), request, {}, ({}, {}), {}
     ).exercises[0].sets
-    assert sets[0].duration_seconds == 15    # 첫 세트만 절반
-    assert sets[1].duration_seconds == 30
+    # 플랭크 30초 × 초급 0.7 = 20초, 워밍업인 첫 세트만 절반
+    assert sets[0].duration_seconds == 10
+    assert sets[1].duration_seconds == 20
+
+
+@pytest.mark.parametrize("slug,level,expect", [
+    ("hand-plank", "beginner", 20),        # 30 × 0.7 = 21 → 5초 단위 20
+    ("hand-plank", "intermediate", 30),
+    ("hand-plank", "advanced", 40),        # 30 × 1.3 = 39 → 40
+    ("wall-sit", "intermediate", 45),      # 등척성 하체는 더 길게
+    ("wall-sit", "beginner", 30),          # 45 × 0.7 = 31.5 → 30
+    ("elbow-side-plank", "intermediate", 25),
+    ("abdominals-stretch-variation-one", "intermediate", 20),
+])
+def test_duration_scales_by_exercise_and_level(monkeypatch, slug, level, expect):
+    from app.routines import service as routines_service
+    from app.routines.schemas import RoutineGenerateRequest
+
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
+        slug: {"slug": slug, "exercise_type": "DURATION"}
+    })
+    request = RoutineGenerateRequest(
+        level=level, muscleGroups=["core"], minutes=30, includeWarmup=False
+    )
+    out = routines_service._build_response(_routine_with(slug), request, {}, ({}, {}), {})
+    assert out.exercises[0].sets[0].duration_seconds == expect
+
+
+def test_unknown_duration_exercise_uses_config_default(monkeypatch):
+    # 카탈로그에 새로 생긴 시간 종목 — 종목별 표에 없으면 설정 기본값 × 난이도
+    from app.routines import service as routines_service
+    from app.routines.schemas import RoutineGenerateRequest
+
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
+        "new-hold": {"slug": "new-hold", "exercise_type": "DURATION"}
+    })
+    request = RoutineGenerateRequest(
+        level="advanced", muscleGroups=["core"], minutes=30, includeWarmup=False
+    )
+    out = routines_service._build_response(_routine_with("new-hold"), request, {}, ({}, {}), {})
+    assert out.exercises[0].sets[0].duration_seconds == 40   # 기본 30 × 1.3 → 40
