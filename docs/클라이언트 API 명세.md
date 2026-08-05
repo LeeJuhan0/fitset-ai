@@ -54,7 +54,7 @@
       "exerciseName": "덤벨 벤치프레스",  // 한글명 (종목 마스터 name_ko)
       "thumbnailUrl": "https://dtcevtkuvdwt9.cloudfront.net/thumbnails/dumbbell-bench-press.webp",  // CDN URL (2026-08-05 — S3 직접 주소는 403이라 폐기)
       "orderIndex": 0,
-      "sets": [ { "orderIndex": 0, "weight": 12.0, "reps": 15 } ]
+      "sets": [ { "orderIndex": 0, "weight": 12.0, "reps": 15, "durationSeconds": null } ]
     }
   ]
 }
@@ -64,6 +64,7 @@
 
 1. 프로필 `avoidBodyParts`는 하드 필터로 적용하되 **요청 `muscleGroups`와 겹치는 부위는 클라 요청 우선**(실효 기피 = `avoidBodyParts − muscleGroups`, 2026-07-25 확정). 기피(제외) 정보는 **요청 필드가 아니라 내부 API 프로필 조회값**이며 `null`(미설정)일 수 있음 — 비즈니스 규칙 §5의 "제외 운동"은 이 경로로 흡수
 2. 세트 `weight`는 최근 기록 기반 무게 추천값, 기록 없으면 신체 정보 기반 초기값. 맨몸은 `null`
+2-B. **세트 구성은 종목 수행 방식(백엔드 `exerciseType`)에 따라 갈린다** (2026-08-05) — `WEIGHT_AND_REPS`는 `weight`+`reps`, `REPS_ONLY`(맨몸 스쿼트 등 32종)는 `reps`만(`weight` null), `DURATION`(플랭크·월싯 등 8종)은 `durationSeconds`만(`weight`·`reps` null, 기본 30초). 워밍업 첫 세트는 무게 종목이면 무게를, 시간 종목이면 시간을 절반으로 낮춘다. 백엔드 저장 API의 `InnerSetRequest`도 세 필드가 모두 선택이라 그대로 실어 보낼 수 있다
 3. 파이프라인: 후보 룰 필터 → 룰 점수 정렬 → LLM 최종 구성
 4. 루틴 저장은 클라가 `exercises[].exerciseId`(UUID)로 백엔드 `POST /api/v1/routines`(`RoutineCommitRequest` — exerciseId 필수)를 조립한다. 값은 백엔드 종목 마스터를 일 1회 배치로 캐시한 것(`exercise_catalog`) — 캐시 미스면 `null`이고 클라가 자체 종목 마스터로 매핑 폴백. AI 서버는 쓰기 없음
 5. **goal은 요청 필드가 아니다** (2026-07-29 확정) — 내부 API 프로필(08 §4.1 `data.goal`)을 쓴다. 프로필 미입력(`null`)이면 `hypertrophy` 기본(기본값 처리는 AI 서버 책임 — 08 §4.1 규약). 홈 화면은 목적 선택 UI를 두지 않는다
