@@ -12,6 +12,7 @@ from app.clients import s3
 from app.core import clock
 from app.clients.spring import get_spring_client
 from app.core.errors import DomainError, ExerciseNotFoundError, VideoNotFoundError
+from app.exercises import repository as exercise_catalog
 
 logger = logging.getLogger("fitset")
 
@@ -29,6 +30,7 @@ async def get_video(slug: str) -> dict:
     url, expires_in = await asyncio.to_thread(s3.presign_video, key)
     expires_at = clock.now_utc() + timedelta(seconds=expires_in)
     return {
+        "exerciseId": exercise_catalog.exercise_id(slug),
         "slug": slug,
         "exerciseName": name,
         "videoUrl": url,

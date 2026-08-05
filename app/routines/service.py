@@ -8,6 +8,7 @@ import numpy as np
 
 from app.clients.spring import get_spring_client
 from app.core import llm, ratelimit
+from app.exercises import repository as exercise_catalog
 from app.core.config import get_settings
 from app.core.errors import (
     AiUnavailableError,
@@ -196,9 +197,11 @@ def _build_response(
             sets[0].weight = domain.warmup_weight(sets[0].weight, equipment)
         exercises.append(
             RoutineExerciseOut(
+                exercise_id=exercise_catalog.exercise_id(slug),
                 slug=slug,
                 exercise_name=exercise["exercise_name"],
-                thumbnail_url=exercise.get("thumbnail_url", ""),
+                # 적재값은 비공개 S3 직접 주소라 클라에서 403이 난다(2026-08-05 실측) — CDN 우선
+                thumbnail_url=exercise_catalog.cdn_thumbnail_url(slug) or exercise.get("thumbnail_url", ""),
                 order_index=exercise["order_index"],
                 sets=sets,
             )

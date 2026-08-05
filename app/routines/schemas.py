@@ -31,9 +31,12 @@ class RoutineSetOut(CamelModel):
 
 
 class RoutineExerciseOut(CamelModel):
-    slug: str              # 종목 식별자 — slug (uuid 미사용)
+    # 백엔드 마스터 UUID — 클라 저장(POST /api/v1/routines)·종목 상세 이동 키.
+    # 카탈로그 캐시 미스면 null (클라가 자체 종목 마스터로 slug 매핑 폴백)
+    exercise_id: str | None
+    slug: str              # AI 서버 내부 식별자 — 가이드·영상 재발급 호출 키
     exercise_name: str     # 한글명 (종목 마스터 name_ko)
-    thumbnail_url: str
+    thumbnail_url: str     # CDN URL (카탈로그) — 미스 시 루틴 적재값
     order_index: int
     sets: list[RoutineSetOut]
 

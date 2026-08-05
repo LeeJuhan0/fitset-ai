@@ -97,3 +97,37 @@ def test_catalog_load_failure_degrades_to_empty(monkeypatch):
     monkeypatch.setattr(repository, "get_exercise_catalog_table", boom)
     assert repository.get_exercise_catalog() == {}
     repository.get_exercise_catalog.cache_clear()
+
+
+def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
+    # §1 루틴 payload — 카탈로그가 있으면 UUID·CDN 썸네일, 없으면 null·적재값 폴백
+    from app.routines import service as routines_service
+    from app.routines.schemas import RoutineGenerateRequest
+
+    routine = {
+        "slug": "chest-45", "name": "가슴 45분", "minutes_per_routine": 45,
+        "exercises": [{
+            "slug": "barbell-bench-press", "exercise_name": "바벨 벤치프레스",
+            "thumbnail_url": "https://fitset-exercise-media.s3.amazonaws.com/thumbnails/x.webp",
+            "order_index": 0, "sets": [{"order_index": 0, "reps": 10}],
+        }],
+    }
+    request = RoutineGenerateRequest(
+        level="intermediate", muscleGroups=["chest"], minutes=45, includeWarmup=False
+    )
+    catalog = {"barbell-bench-press": {
+        "slug": "barbell-bench-press",
+        "exercise_id": "11f18f47-0001-0000-8072-021f94ad3563",
+        "thumbnail_url": "https://cdn.example/thumbnails/barbell-bench-press.webp",
+    }}
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: catalog)
+
+    out = routines_service._build_response(routine, request, {}, ({}, {}), {})
+    assert out.exercises[0].exercise_id == "11f18f47-0001-0000-8072-021f94ad3563"
+    assert out.exercises[0].thumbnail_url.startswith("https://cdn.example/")   # S3 직접 주소 아님
+
+    # 카탈로그 미스 — null + 적재값 폴백, 예외 없음
+    monkeypatch.setattr(repository, "get_exercise_catalog", dict)
+    out = routines_service._build_response(routine, request, {}, ({}, {}), {})
+    assert out.exercises[0].exercise_id is None
+    assert "s3.amazonaws.com" in out.exercises[0].thumbnail_url

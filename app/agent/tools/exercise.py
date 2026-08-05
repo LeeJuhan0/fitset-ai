@@ -15,6 +15,7 @@ from app.agent import guardrails
 from app.agent.tools import failures
 from app.clients.spring import get_spring_client
 from app.core.errors import DomainError
+from app.exercises import repository as exercise_catalog
 from app.exercises import service as exercises_service
 
 logger = logging.getLogger("fitset")
@@ -76,6 +77,8 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         )
 
     payload = {
+        # 백엔드 마스터 UUID — 클라의 종목 상세 이동 키 (카탈로그 미스면 null)
+        "exerciseId": exercise_catalog.exercise_id(slug),
         "slug": slug,
         "exerciseName": name,
         "videoUrl": video["videoUrl"] if video else None,
