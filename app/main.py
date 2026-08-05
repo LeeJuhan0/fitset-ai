@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import configure_logging, trace_id_var
 from app.exercises import router as exercises_router
+from app.exercises.repository import get_exercise_catalog
 from app.routines import router as routines_router
 from app.routines.repository import get_exercise_meta, get_routine_store
 
@@ -37,8 +38,10 @@ async def lifespan(app: FastAPI):
     async def load_store() -> None:
         try:
             await asyncio.to_thread(store.load)
-            # 종목 마스터(1.2MB JSON) 선로딩 — 첫 요청이 파싱으로 이벤트 루프를 막지 않게
+            # 종목 마스터(1.2MB JSON)·카탈로그(DynamoDB Scan) 선로딩 —
+            # 첫 요청이 파싱·I/O로 이벤트 루프를 막지 않게
             await asyncio.to_thread(get_exercise_meta)
+            await asyncio.to_thread(get_exercise_catalog)
             logger.info("routine store loaded: %d routines", len(store.routines))
         except Exception:
             logger.exception("routine store load failed")

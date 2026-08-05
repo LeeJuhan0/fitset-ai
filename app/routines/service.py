@@ -8,7 +8,6 @@ import numpy as np
 
 from app.clients.spring import get_spring_client
 from app.core import llm, ratelimit
-from app.exercises import repository as exercise_catalog
 from app.core.config import get_settings
 from app.core.errors import (
     AiUnavailableError,
@@ -16,6 +15,7 @@ from app.core.errors import (
     RateLimitedError,
     UnsafeConstraintError,
 )
+from app.exercises import repository as exercise_catalog
 from app.routines import domain, prompts
 from app.routines.repository import get_exercise_meta, get_routine_store
 from app.routines.schemas import (
