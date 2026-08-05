@@ -131,3 +131,55 @@ def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
     out = routines_service._build_response(routine, request, {}, ({}, {}), {})
     assert out.exercises[0].exercise_id is None
     assert "s3.amazonaws.com" in out.exercises[0].thumbnail_url
+
+
+@pytest.fixture
+def catalog_only(monkeypatch):
+    """카탈로그만 채우고 S3·내부 API는 대역으로 — 영상 URL 출처 분기 검증용."""
+    monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
+        "barbell-bench-press": {
+            "slug": "barbell-bench-press",
+            "exercise_id": "11f18f47-0001-0000-8072-021f94ad3563",
+            "video_url": "https://cdn.example/videos/barbell-bench-press.mp4",
+        },
+        "push-up": {"slug": "push-up", "exercise_id": "11f18f47-0002-0000-8072-021f94ad3563"},
+    })
+    from app.clients import s3
+    monkeypatch.setattr(s3, "presign_video", lambda key: (f"https://s3.example/{key}?sig=x", 3600))
+
+
+async def test_video_prefers_cdn_without_expiry(catalog_only):
+    from app.exercises import service as exercises_service
+
+    video = await exercises_service.get_video("barbell-bench-press")
+    assert video["videoUrl"].startswith("https://cdn.example/")
+    assert video["expiresAt"] is None            # CDN은 만료가 없다 — 재발급 왕복 불필요
+    assert video["exerciseId"].endswith("021f94ad3563")
+
+
+async def test_video_falls_back_to_presign_on_request(catalog_only, monkeypatch):
+    # 클라가 CDN 재생 실패로 fallback=true를 요청하면 서명 URL + 만료로 강등
+    from app.clients import spring
+    from app.exercises import service as exercises_service
+
+    async def fake_detail(slug):
+        return {"videoKey": f"videos/{slug}.mp4"}
+    monkeypatch.setattr(spring.get_spring_client(), "get_exercise", fake_detail)
+
+    video = await exercises_service.get_video("barbell-bench-press", fallback=True)
+    assert video["videoUrl"].startswith("https://s3.example/")
+    assert video["expiresAt"].endswith("Z")
+
+
+async def test_video_uses_presign_when_catalog_has_no_url(catalog_only, monkeypatch):
+    # 카탈로그에 영상이 없는 종목 — fallback 요청이 없어도 자동으로 presign 경로
+    from app.clients import spring
+    from app.exercises import service as exercises_service
+
+    async def fake_detail(slug):
+        return {"videoKey": f"videos/{slug}.mp4"}
+    monkeypatch.setattr(spring.get_spring_client(), "get_exercise", fake_detail)
+
+    video = await exercises_service.get_video("push-up")
+    assert video["videoUrl"].startswith("https://s3.example/")
+    assert video["expiresAt"] is not None
