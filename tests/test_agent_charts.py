@@ -1,5 +1,5 @@
 """차트 집계 테스트 — §7 payload 계약(x·values 길이 동일)과 데이터 부족 시 None 강등."""
-from app.agent import charts
+from app.charts import domain as charts
 
 META = {
     "barbell-bench-press": {"name_ko": "바벨 벤치프레스", "primaryMuscles": ["Chest"]},
