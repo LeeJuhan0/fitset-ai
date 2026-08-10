@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.chat import router as chat_router
 from app.core.config import get_settings
@@ -149,3 +150,7 @@ async def health() -> JSONResponse:
 app.include_router(routines_router.router)
 app.include_router(chat_router.router)
 app.include_router(exercises_router.router)
+
+# 메트릭 노출(/metrics) — Alloy 사이드카가 localhost로 60초마다 수집해 Grafana Cloud로 보낸다.
+# ALB는 /ai/* 만 이 서버로 라우팅하므로 /metrics 는 인터넷에 나가지 않는다(백엔드 /actuator 와 동일 원리).
+Instrumentator(excluded_handlers=["/metrics"]).instrument(app).expose(app, include_in_schema=False)
