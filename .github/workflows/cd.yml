@@ -16,9 +16,11 @@ permissions:
 env:
   AWS_REGION: ap-northeast-2
   ECR_REPOSITORY: fitset-ai-server
+  ALLOY_ECR_REPOSITORY: fitset-ai-alloy
   ECS_CLUSTER: fitset-cluster
   ECS_SERVICE: fitset-ai-server
   CONTAINER_NAME: fitset-ai-server
+  ALLOY_CONTAINER_NAME: alloy
   TASK_DEFINITION: .aws/task-definition.json
 
 jobs:
@@ -49,6 +51,18 @@ jobs:
           docker push "$LATEST"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+      - name: Build & push Alloy sidecar image
+        id: build-alloy
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ALLOY_ECR_REPOSITORY:${{ github.sha }}"
+          LATEST="$REGISTRY/$ALLOY_ECR_REPOSITORY:latest"
+          docker build --platform linux/amd64 -t "$IMAGE" -t "$LATEST" ./alloy
+          docker push "$IMAGE"
+          docker push "$LATEST"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
       - name: Render new task definition
         id: taskdef
         uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -57,10 +71,19 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build.outputs.image }}
 
+      # 앞 렌더링의 출력이 다음 렌더링의 입력이 되는 연쇄 — 배포에는 반드시 마지막 결과를 넘긴다
+      - name: Render task definition (Alloy image)
+        id: taskdef-alloy
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.taskdef.outputs.task-definition }}
+          container-name: ${{ env.ALLOY_CONTAINER_NAME }}
+          image: ${{ steps.build-alloy.outputs.image }}
+
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
-          task-definition: ${{ steps.taskdef.outputs.task-definition }}
+          task-definition: ${{ steps.taskdef-alloy.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
