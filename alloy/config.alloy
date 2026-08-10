@@ -1,0 +1,35 @@
+// 수집 → 가공 → 전송. 백엔드 가이드(Confluence "Grafana Cloud 연동")와 같은 구조를
+// FastAPI에 맞춰 조정 — 대상 localhost:8000, 경로 /metrics, JVM 드롭 규칙 없음.
+prometheus.scrape "fitset_ai_server" {
+  targets         = [{ __address__ = "localhost:8000", job = "fitset-ai-server" }]
+  metrics_path    = "/metrics"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.cleanup.receiver]
+}
+
+prometheus.relabel "cleanup" {
+  // 태스크 스케일아웃 시 시리즈 충돌 방지 — 모든 사이드카의 타깃 주소가 localhost:8000 으로 같다
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+
+  // 백엔드의 application/environment 태그와 같은 역할 — 대시보드에서 서비스·환경 필터용
+  rule {
+    target_label = "environment"
+    replacement  = "prod"
+  }
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_PROM_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_PROM_USER")
+      password = sys.env("GRAFANA_API_TOKEN")
+    }
+  }
+}
