@@ -13,7 +13,7 @@ import logging
 
 from app.charts import domain
 from app.clients.spring import get_spring_client
-from app.routines.repository import get_exercise_meta
+from app.exercises.repository import get_exercise_meta
 
 logger = logging.getLogger("fitset")
 

@@ -63,12 +63,12 @@ async def test_dispatch_unknown_tool_name():
 
 def test_suggest_exercises_partial_korean_name():
     # Nova 실측 — 작은 모델은 "스쿼트"처럼 부분 이름을 넘긴다. 후보가 나와야 한 왕복에 복구된다
-    from app.agent import guardrails
+    from app.exercises import repository as exercise_catalog
 
-    hints = guardrails.suggest_exercises("스쿼트")
+    hints = exercise_catalog.suggest_exercises("스쿼트")
     assert hints and any("스쿼트" in name for name in hints)
-    assert guardrails.suggest_exercises("벤치프레스")
-    assert guardrails.suggest_exercises("존재하지않는운동종목") == []
+    assert exercise_catalog.suggest_exercises("벤치프레스")
+    assert exercise_catalog.suggest_exercises("존재하지않는운동종목") == []
 
 
 async def test_chart_unresolved_exercise_returns_hints_not_empty_data(monkeypatch):

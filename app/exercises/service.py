@@ -16,7 +16,6 @@ import asyncio
 import logging
 from datetime import timedelta
 
-from app.agent import guardrails
 from app.clients import s3
 from app.clients.spring import get_spring_client
 from app.core import clock
@@ -28,7 +27,7 @@ logger = logging.getLogger("fitset")
 
 async def get_video(slug: str, fallback: bool = False) -> dict:
     """가이드 영상 재생 URL. 기본은 CDN, fallback=True거나 CDN 미보유면 presigned URL."""
-    name = guardrails.exercise_name(slug)
+    name = exercise_catalog.exercise_name(slug)
     if name is None:
         raise ExerciseNotFoundError()
 

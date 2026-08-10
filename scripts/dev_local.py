@@ -29,7 +29,8 @@ from app.clients import s3, spring
 from app.core import llm
 from app.core.clock import iso_utc
 from app.main import app
-from app.routines.repository import get_exercise_meta, get_routine_store
+from app.exercises.repository import get_exercise_meta
+from app.routines.repository import get_routine_store
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 NOW = datetime.now(timezone.utc)

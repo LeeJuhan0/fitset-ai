@@ -19,9 +19,9 @@ from app.core.config import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import configure_logging, trace_id_var
 from app.exercises import router as exercises_router
-from app.exercises.repository import get_exercise_catalog
+from app.exercises.repository import get_exercise_catalog, get_exercise_meta
 from app.routines import router as routines_router
-from app.routines.repository import get_exercise_meta, get_routine_store
+from app.routines.repository import get_routine_store
 
 configure_logging()
 logger = logging.getLogger("fitset")

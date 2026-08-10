@@ -7,12 +7,32 @@
 각 도메인 schemas.py의 모델은 CamelModel을 상속하고, 라우터는
 response_model=ApiResponse[모델] (목록은 ApiResponse[ListData[모델]]) 로 검증·문서화·필터링을 받는다.
 """
+from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel   # snake_case → camelCase 자동 alias
 
 T = TypeVar("T")   # data 또는 items에 담기는 타입
+
+
+class ResponseScheme(StrEnum):
+    """responseScheme 어휘 (클라이언트 API 명세 §5) — 이 4개가 전부다.
+
+    StrEnum이라 멤버가 곧 문자열이다: 비교("chart" == CHART), dict 키, JSON 직렬화,
+    로그 포맷(%s → "chart") 전부 평문자열처럼 동작하면서, 오타는 정의 시점에 잡힌다.
+    응답 계약 어휘라 core에 둔다 — chat 스키마와 agent 가드레일이 같은 정의를 쓴다.
+    """
+
+    TEXT = "text"
+    CHART = "chart"
+    EXERCISE_GIF = "exerciseGif"
+    ROUTINE = "routine"
+
+
+# payload를 동반해야 하는 scheme — 아니면 text로 강등된다 (§7 tagged union)
+PAYLOAD_SCHEMES = frozenset({ResponseScheme.CHART, ResponseScheme.EXERCISE_GIF, ResponseScheme.ROUTINE})
+DEFAULT_SCHEME = ResponseScheme.TEXT
 
 
 class CamelModel(BaseModel):

@@ -8,11 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.agent.guardrails import ResponseScheme
-from app.agent import guardrails
 from app.agent.tools import failures
 from app.charts import service as charts_service
 from app.core.errors import DomainError
+from app.core.schemas import ResponseScheme
+from app.exercises import repository as exercise_catalog
 
 logger = logging.getLogger("fitset")
 
@@ -57,16 +57,16 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     exercise_label = None
     # 종목 해석 실패는 "기록 부족"과 다르다 — 후보를 돌려줘 LLM이 정확한 이름으로 재호출하게 한다
     if request.metric == "exercisePr":
-        exercise_slug = guardrails.resolve_exercise_slug(request.exercise or "")
+        exercise_slug = exercise_catalog.resolve_exercise_slug(request.exercise or "")
         if exercise_slug is None:
-            hints = guardrails.suggest_exercises(request.exercise or "")
+            hints = exercise_catalog.suggest_exercises(request.exercise or "")
             if hints:
                 return (
                     f"'{request.exercise}'와 정확히 일치하는 종목이 없습니다. "
                     f"비슷한 종목: {', '.join(hints)}. 이 중 하나로 다시 호출하거나 사용자에게 확인한다."
                 ), None
             return f"'{request.exercise}' 종목을 찾지 못했습니다. 사용자에게 종목명을 확인한다.", None
-        exercise_label = guardrails.exercise_name(exercise_slug) or exercise_slug
+        exercise_label = exercise_catalog.exercise_name(exercise_slug) or exercise_slug
 
     try:
         payload = await charts_service.build_payload(

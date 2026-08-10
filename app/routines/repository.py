@@ -4,9 +4,7 @@
 정규화 임베딩 행렬만 유지한다(~350MB). 세트 상세가 담긴 전체 루틴은 최종 선택된
 1건만 GetItem으로 가져온다 — 다중 조건 필터를 DynamoDB 쿼리로 하지 않는다.
 """
-import json
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
@@ -91,11 +89,3 @@ class RoutineStore:
 @lru_cache
 def get_routine_store() -> RoutineStore:
     return RoutineStore()
-
-
-@lru_cache
-def get_exercise_meta() -> dict[str, dict]:
-    """종목 마스터 206종 (repo 동봉 metadata) — slug → 항목."""
-    path = Path(get_settings().exercise_metadata_path)
-    entries = json.loads(path.read_text())
-    return {entry["slug"]: entry for entry in entries}

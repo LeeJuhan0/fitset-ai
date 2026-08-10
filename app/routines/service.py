@@ -17,7 +17,8 @@ from app.core.errors import (
 )
 from app.exercises import repository as exercise_catalog
 from app.routines import domain, prompts
-from app.routines.repository import get_exercise_meta, get_routine_store
+from app.exercises.repository import get_exercise_meta
+from app.routines.repository import get_routine_store
 from app.routines.schemas import (
     RoutineExerciseOut,
     RoutineGenerateRequest,

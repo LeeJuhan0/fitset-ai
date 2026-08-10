@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.agent.guardrails import ResponseScheme
+from app.core.schemas import ResponseScheme
 from app.agent.tools import failures
 from app.core.errors import DomainError
 from app.routines import service as routines_service

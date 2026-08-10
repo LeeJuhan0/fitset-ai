@@ -11,10 +11,10 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from app.agent import guardrails
 from app.agent.tools import failures
 from app.clients.spring import get_spring_client
 from app.core.errors import DomainError
+from app.core.schemas import ResponseScheme
 from app.exercises import repository as exercise_catalog
 from app.exercises import service as exercises_service
 
@@ -31,9 +31,9 @@ class GetExerciseGuide(BaseModel):
 
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     """종목 가이드를 조회해 (LLM에 돌려줄 설명 근거, exerciseGif payload)를 반환한다."""
-    slug = guardrails.resolve_exercise_slug(args.get("exercise", ""))
+    slug = exercise_catalog.resolve_exercise_slug(args.get("exercise", ""))
     if slug is None:
-        hints = guardrails.suggest_exercises(args.get("exercise", ""))
+        hints = exercise_catalog.suggest_exercises(args.get("exercise", ""))
         if hints:
             return (
                 f"'{args.get('exercise')}'와 정확히 일치하는 종목이 없습니다. "
@@ -60,7 +60,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         logger.warning("exercise detail lookup failed: %s", slug, exc_info=True)
         detail_fault = failures.is_server_fault(exc)
 
-    name = detail.get("name") or guardrails.exercise_name(slug) or slug
+    name = detail.get("name") or exercise_catalog.exercise_name(slug) or slug
     instructions = detail.get("instructions") or []
     steps = " / ".join(instructions) if instructions else "(수행 방법 데이터 없음)"
     summary = (
@@ -84,4 +84,4 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         "videoUrl": video["videoUrl"] if video else None,
         "expiresAt": video["expiresAt"] if video else None,
     }
-    return summary, {"response_scheme": guardrails.ResponseScheme.EXERCISE_GIF, "payload": payload}
+    return summary, {"response_scheme": ResponseScheme.EXERCISE_GIF, "payload": payload}

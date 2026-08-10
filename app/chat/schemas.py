@@ -8,10 +8,9 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel, ErrorResponse
+from app.core.schemas import CamelModel, ErrorResponse, ResponseScheme
 
 Role = Literal["user", "assistant"]
-ResponseScheme = Literal["text", "chart", "exerciseGif", "routine"]
 
 
 class ThreadOut(CamelModel):
