@@ -123,13 +123,6 @@ async def test_공유하고_만료가_간격보다_길면_동시성만큼만_뚫
         assert server.connections < TOTAL // 5   # 요청 수 대비 압도적으로 적음이 핵심
 
 
-def test_운영_스프링_클라이언트는_lru_cache_싱글턴():
-    """배선 검증 — get_spring_client가 항상 같은 인스턴스를 돌려줘야 위 C 시나리오가 성립한다."""
-    from app.clients.spring import get_spring_client
-
-    assert get_spring_client() is get_spring_client()
-
-
 @pytest.mark.asyncio
 async def test_운영_팩토리를_매_요청_불러도_C와_같은_수치가_나온다(monkeypatch):
     """D) 진짜 get_spring_client()로 같은 부하를 보낸다 — 운영 코드의 실제 사용 형태.
