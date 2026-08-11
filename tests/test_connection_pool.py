@@ -41,12 +41,16 @@ class _CountingServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections += 1
+        # 본문은 팀 봉투 JSON — 운영 SpringInternalClient(_get이 data를 벗김)도 그대로 통과한다
+        body = b'{"traceId":"t","data":{}}'
+        head = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\nConnection: keep-alive\r\n\r\n"
+        )
         try:
             while True:
                 await reader.readuntil(b"\r\n\r\n")
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
-                )
+                writer.write(head + body)
                 await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionResetError):
             return
@@ -124,3 +128,32 @@ def test_운영_스프링_클라이언트는_lru_cache_싱글턴():
     from app.clients.spring import get_spring_client
 
     assert get_spring_client() is get_spring_client()
+
+
+@pytest.mark.asyncio
+async def test_운영_팩토리를_매_요청_불러도_C와_같은_수치가_나온다(monkeypatch):
+    """D) 진짜 get_spring_client()로 같은 부하를 보낸다 — 운영 코드의 실제 사용 형태.
+
+    서비스 코드는 요청마다 get_spring_client().get_...을 부른다. lru_cache 덕에
+    이 형태가 A(매번 새 클라이언트)가 아니라 C(공유)와 같은 수치임을 실측한다.
+    """
+    from app.clients import spring
+    from app.core.config import get_settings
+
+    async with _CountingServer() as server:
+        # 운영 base_url(스프링 내부 주소)을 카운팅 서버로 돌리고, 캐시된 구 클라이언트 폐기
+        monkeypatch.setattr(get_settings(), "spring_internal_base_url", server.base_url)
+        spring.get_spring_client.cache_clear()
+        try:
+            async def via_factory():
+                # 요청마다 팩토리 호출 — 서비스 코드와 동일한 사용 형태
+                await spring.get_spring_client().get_exercise("barbell-squat")
+
+            latencies = await _drive(via_factory)
+            _report("D) 운영 get_spring_client() 매 요청 호출", server, latencies)
+            assert server.connections <= BATCH_SIZE + 3     # C와 같은 기준
+            assert server.connections < TOTAL // 5
+        finally:
+            # 카운팅 서버를 가리키는 클라이언트가 다른 테스트로 새지 않게 닫고 캐시를 비운다
+            await spring.get_spring_client()._client.aclose()
+            spring.get_spring_client.cache_clear()
