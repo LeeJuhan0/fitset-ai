@@ -6,10 +6,12 @@ FastAPI가 요청 스코프에서 같은 의존성을 캐시해 검증이 1회�
 
 pytest -s tests/test_deps_cache.py 로 실행하면 횟수가 print로 보인다.
 """
+import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from app import deps
+from app.chat import repository
 from app.core import auth
 from app.main import app
 
@@ -25,6 +27,13 @@ class _Counter:
     def __call__(self, token: str) -> str:
         self.calls += 1
         return "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.fixture(autouse=True)
+def stub_repository(monkeypatch):
+    # 관심사는 의존성 캐시뿐 — 핸들러 뒤의 DynamoDB 조회를 막는다
+    # (없으면 로컬에선 실제 테이블을 때리고, 자격증명 없는 CI에선 NoCredentialsError)
+    monkeypatch.setattr(repository, "list_threads", lambda user_id: [])
 
 
 def test_이중_선언이어도_요청당_검증은_1회(monkeypatch):
