@@ -1,5 +1,7 @@
 # 내부 API 명세 (Internal · 유저 데이터 조회)
 
+> **폐기 (2026-08-12 합의)** — 내부 API 연동을 전면 파기하고, AI 서버가 백엔드 RDS MySQL(`fitset` 스키마)을 읽기 전용 계정(`fitset_readonly`, SELECT만)으로 직접 조회하기로 백엔드와 합의했다. 데이터 계약의 정본은 이 문서에서 [백엔드 ERD](백엔드%20ERD.md) + `app/clients/backend_schema.py`(SQLAlchemy 엔티티)로 넘어간다. 이 문서는 협의 이력 참조용으로만 보존한다. 코드의 spring 클라이언트 제거는 이슈 #36 후속.
+
 ## 1. 문서 정보
 
 | 항목 | 내용 |

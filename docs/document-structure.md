@@ -105,7 +105,7 @@ Table exercise_catalog {
   exercise_id uuid [note: '백엔드 종목 마스터 UUID — 클라 루틴 저장(POST /api/v1/routines)·종목 상세 이동 키']
   exercise_type varchar [note: 'WEIGHT_AND_REPS(166) | REPS_ONLY(32) | DURATION(8) — 세트 구성 분기 키']
   thumbnail_url varchar [note: 'CloudFront CDN 썸네일 — 종전 S3 직접 주소는 403이라 폐기(2026-08-05 실측)']
-  video_url varchar [note: 'CloudFront CDN 가이드 영상 — 무서명·무기한. 미보유 종목은 속성 없음(presign 폴백)']
+  video_url varchar [note: 'CloudFront CDN 가이드 영상 — 무서명·무기한. 미보유 종목은 속성 없음(종목 마스터 videoUrl 폴백)']
 
   Note: '''
   종목 카탈로그 — 백엔드 종목 마스터의 파생 캐시 (온디맨드, TTL 없음, 2026-08-05 신설)
@@ -115,7 +115,7 @@ Table exercise_catalog {
   - 담는 것은 AI 서버가 자체 생성 못 하는 값뿐 — UUID·수행 방식·CDN URL.
     한글명·부위·장비는 repo 동봉 metadata가 정본이라 중복 저장하지 않는다
   - 서버는 부팅 시 Scan 인메모리(206건) — 배치가 갱신해도 재시작 전까지 미반영(F16과 동일)
-  - 비어 있어도 서버 정상 — exerciseId null·영상 presign 폴백으로 강등
+  - 비어 있어도 서버 정상 — exerciseId null. 구 폴백(내부 API §4.3 videoUrl)은 내부 API 파기(2026-08-12)로 소멸, 카탈로그가 영상 URL 유일 출처(비면 영상 없음)
   '''
 }
 
@@ -173,8 +173,8 @@ payload는 항상 `null`. 유저 메시지는 항상 이 형태.
 }
 ```
 
-- `videoUrl`은 CDN이라 만료가 없다(`expiresAt` null) — 저장된 대화를 나중에 열어도 그대로 재생 (2026-08-05, 종전 presign 방식 폐기)
-- presign 폴백(카탈로그 미보유·CDN 재생 실패)일 때만 `expiresAt`에 ISO 시각 — 클라는 §6-B `fallback=true`로 재발급
+- `videoUrl`은 CDN이라 만료가 없다(`expiresAt`은 항상 null) — 저장된 대화를 나중에 열어도 그대로 재생 (2026-08-05 presign 방식 폐기, 2026-08-06 폴백까지 폐기)
+- 카탈로그 미보유·CDN 재생 실패 시 구 재조회 경로(내부 API §4.3 `videoUrl`)는 내부 API 파기(2026-08-12)로 소멸 — 클라 §6-B `fallback=true` 재발급도 카탈로그 캐시에서 답한다 (캐시에도 없으면 영상 없음)
 - 영상 없는 종목은 `videoUrl`·`expiresAt` 모두 null
 
 ### 2.4 `routine`
