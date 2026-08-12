@@ -46,7 +46,12 @@ def db(monkeypatch):
             Exercise(
                 id=_uid("bench"), slug="barbell-bench-press", name="바벨 벤치프레스",
                 equipment_id=_uid("eq"), difficulty="INTERMEDIATE",
-                exercise_type="WEIGHT_AND_REPS", instructions=["눕는다", "민다"],
+                exercise_type="WEIGHT_AND_REPS",
+                # 실 DB 형태 — {"content", "stepOrder"} dict 배열 (prod 실측 2026-08-12)
+                instructions=[
+                    {"content": "민다", "stepOrder": 2},
+                    {"content": "눕는다", "stepOrder": 1},
+                ],
             ),
             ExerciseMuscle(id=_uid("em1"), exercise_id=_uid("bench"), muscle_id=_uid("chest"), role="PRIMARY"),
             ExerciseMuscle(id=_uid("em2"), exercise_id=_uid("bench"), muscle_id=_uid("triceps"), role="SECONDARY"),
@@ -150,6 +155,7 @@ def test_get_exercise_detail_with_muscle_roles(db, monkeypatch):
     assert detail["secondaryMuscles"] == ["triceps"]
     assert detail["equipment"] == "barbell"
     assert detail["difficulty"] == "intermediate"    # INTERMEDIATE → camelCase
+    # dict 배열이 stepOrder 순 문자열 배열로 정규화된다 — 구 §4.3 Array<String> 계약
     assert detail["instructions"] == ["눕는다", "민다"]
     assert detail["thumbnailUrl"] == "https://cdn/thumb.jpg"
 

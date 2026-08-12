@@ -131,6 +131,20 @@ def exercise_name(slug: str) -> str | None:
     return entry.get("name_ko") or entry.get("name")
 
 
+def _instruction_steps(raw) -> list[str]:
+    """instructions JSON → 문자열 배열 — 구 내부 API가 하던 정규화의 승계.
+
+    실 DB는 [{"content": 문장, "stepOrder": n}] 형태다(2026-08-12 prod 실측 —
+    미정규화 시 툴의 join이 TypeError로 죽어 영상 payload까지 유실된다).
+    """
+    if not raw:
+        return []
+    if all(isinstance(step, str) for step in raw):
+        return list(raw)
+    ordered = sorted(raw, key=lambda step: step.get("stepOrder", 0))
+    return [step.get("content", "") for step in ordered if step.get("content")]
+
+
 def get_exercise(slug: str) -> dict:
     """종목 마스터 상세 — 백엔드 MySQL 직조회 (구 내부 API §4.3 승계).
 
@@ -160,7 +174,7 @@ def get_exercise(slug: str) -> dict:
         "secondaryMuscles": [m["slug"] for m in muscles if m["role"] == "SECONDARY"],
         "equipment": row["equipment"],
         "difficulty": mysql.camel_enum(row["difficulty"]),
-        "instructions": row["instructions"] or [],
+        "instructions": _instruction_steps(row["instructions"]),
         "thumbnailUrl": cdn_thumbnail_url(slug),
         "videoUrl": cdn_video_url(slug),
     }
