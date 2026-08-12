@@ -1,13 +1,24 @@
-"""채팅 도메인 순수 로직 — I/O 없는 함수·상수만.
+"""채팅 도메인 순수 로직 — I/O 없는 함수·상수·레코드만.
 
-ULID 생성, TTL 계산, 만료 판정, 정원 초과 스레드 선별, 요약 시점 판정을 모은다.
-저장 항목(dict)을 받아 계산만 하고 읽기·쓰기는 repository가 담당한다 (계층 규칙).
+ULID 생성, TTL 계산, 스레드 레코드(만료 판정 포함), 정원 초과 선별, 요약 시점 판정을 모은다.
+계산만 하고 읽기·쓰기는 repository가 담당한다 (계층 규칙).
 """
 import os
 import threading
 from datetime import datetime, timedelta
+from enum import StrEnum
 
-from app.core.clock import iso_utc, now_utc   # noqa: F401 — 기존 domain.iso_utc 참조 유지 (core/clock 이관)
+from pydantic import BaseModel
+
+from app.core.clock import iso_utc, now_utc
+
+
+class StreamKind(StrEnum):
+    """전송 스트림 의미 이벤트 어휘 — service가 내고 router가 SSE 프레임으로 직렬화한다."""
+
+    DELTA = "delta"
+    DONE = "done"
+    ERROR = "error"
 
 # Crockford Base32 — ULID 표준 알파벳 (I·L·O·U 제외로 오독 방지)
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -64,31 +75,69 @@ def ttl_epoch(last_message_at: datetime, days: int) -> int:
     return int((last_message_at + timedelta(days=days)).timestamp())
 
 
-def is_expired(thread: dict, now: datetime) -> bool:
-    """만료 판정 — DynamoDB TTL 삭제는 며칠 지연될 수 있어 조회 단계에서 숨긴다."""
-    expires_at = thread.get("expires_at")
-    if expires_at is None:
-        return False
-    return int(expires_at) <= int(now.timestamp())
+class ThreadRecord(BaseModel):
+    """chat_threads 아이템 1건 — 저장 형태의 정본 (document-structure.md와 1:1).
+
+    service↔repository 사이의 계약을 dict 대신 타입으로 강제한다 — 키 오타·필드 누락은
+    생성 시점에, 저장 아이템의 타입 어긋남은 from_item에서 즉시 잡힌다.
+    """
+
+    user_id: str
+    thread_id: str
+    title: str | None = None
+    summary_text: str | None = None
+    summary_upto: str | None = None
+    last_message_at: str | None = None
+    expires_at: int | None = None
+    created_at: str
+
+    @classmethod
+    def open(cls, user_id: str, now: datetime, ttl_days: int) -> "ThreadRecord":
+        """새 스레드 조립 — 빈 스레드도 방치되면 지워지도록 생성 시각 기준 TTL을 건다."""
+        return cls(
+            user_id=user_id,
+            thread_id=new_ulid(now),
+            expires_at=ttl_epoch(now, ttl_days),
+            created_at=iso_utc(now),
+        )
+
+    @classmethod
+    def from_item(cls, item: dict) -> "ThreadRecord":
+        """DynamoDB 아이템 → 레코드 — 스키마 드리프트를 읽는 즉시 드러낸다."""
+        return cls.model_validate(item)
+
+    def to_item(self) -> dict:
+        """저장용 dict — None 필드는 속성 자체를 빼 sparse로 저장한다.
+
+        NULL 타입으로 저장하면 if_not_exists가 NULL을 '있는 값'으로 보고 title을
+        영영 채우지 못한다. 읽는 쪽은 전부 기본값 필드라 부재와 null이 동치다.
+        """
+        return self.model_dump(exclude_none=True)
+
+    def is_expired(self, now: datetime) -> bool:
+        """만료 판정 — DynamoDB TTL 삭제는 며칠 지연될 수 있어 조회 단계에서 숨긴다."""
+        if self.expires_at is None:
+            return False
+        return self.expires_at <= int(now.timestamp())
 
 
-def _activity_key(thread: dict) -> tuple[str, str]:
+def _activity_key(thread: ThreadRecord) -> tuple[str, str]:
     """정렬 키 — 마지막 활동, 동률이면 thread_id(ULID에 생성 시각 내장).
 
     한 번도 안 쓴 스레드는 last_message_at이 전부 null이라 키가 동률이 된다. 이때
     thread_id로 갈라주지 않으면 정렬이 입력 순서에 좌우돼 **가장 오래된 스레드 대신
     가장 최근 것이 LRU 삭제 대상이 된다**.
     """
-    return thread.get("last_message_at") or "", thread.get("thread_id") or ""
+    return thread.last_message_at or "", thread.thread_id
 
 
-def active_threads(threads: list[dict], now: datetime) -> list[dict]:
+def active_threads(threads: list[ThreadRecord], now: datetime) -> list[ThreadRecord]:
     """만료 제외 + 최근 활동순 정렬 — 목록 응답과 정원 판정이 같은 순서를 공유한다."""
-    alive = [thread for thread in threads if not is_expired(thread, now)]
+    alive = [thread for thread in threads if not thread.is_expired(now)]
     return sorted(alive, key=_activity_key, reverse=True)
 
 
-def overflow_threads(active: list[dict], limit: int) -> list[dict]:
+def overflow_threads(active: list[ThreadRecord], limit: int) -> list[ThreadRecord]:
     """새 스레드 자리를 만들기 위해 지울 스레드 — 활동순 뒤쪽(가장 오래 미활동)부터."""
     if len(active) < limit:
         return []

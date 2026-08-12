@@ -12,6 +12,7 @@ prebuilt ToolNode를 쓰지 않는 이유: 툴 결과에서 **텍스트(LLM용)�
 """
 import logging
 import operator
+from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, TypedDict
 
@@ -25,6 +26,13 @@ from app.core import llm
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
+
+
+class GraphEvent(StrEnum):
+    """run_turn_stream 이벤트 어휘 — DELTA는 본문 조각, RESULT는 최종 AgentResult."""
+
+    DELTA = "delta"
+    RESULT = "result"
 
 
 class ChatState(TypedDict):
@@ -210,7 +218,7 @@ async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) 
 
 
 async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMessage]):
-    """대화 1턴 스트리밍 실행 — ("delta", 본문 조각)을 흘리고 마지막에 ("result", AgentResult).
+    """대화 1턴 스트리밍 실행 — (GraphEvent.DELTA, 본문 조각)을 흘리고 마지막에 (GraphEvent.RESULT, AgentResult).
 
     조각은 agent 노드의 LLM 토큰만이다 — tools 노드(툴 결과)는 본문이 아니라 거른다.
     툴 실행 구간은 조각이 없는 게 정상이며 연결 유지(하트비트)는 호출부 몫이다(§4.6).
@@ -228,5 +236,5 @@ async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMes
             continue
         text = _chunk_text(chunk)
         if text:
-            yield "delta", text
-    yield "result", _finalize(final_state)
+            yield GraphEvent.DELTA, text
+    yield GraphEvent.RESULT, _finalize(final_state)

@@ -14,6 +14,7 @@ import logging
 
 from boto3.dynamodb.conditions import Key
 
+from app.chat.domain import ThreadRecord
 from app.core.dynamo import (
     get_chat_messages_table,
     get_chat_threads_table,
@@ -33,32 +34,29 @@ def _names(fields) -> dict:
     return {f"#{field}": field for field in fields}
 
 
-def list_threads(user_id: str) -> list[dict]:
+def list_threads(user_id: str) -> list[ThreadRecord]:
     """유저의 전체 스레드 — 최대 5개라 정렬·만료 필터는 메모리에서 한다(GSI 불필요)."""
     response = get_chat_threads_table().query(
         KeyConditionExpression=Key("user_id").eq(user_id)
     )
-    return [to_plain(item) for item in response.get("Items", [])]
+    return [ThreadRecord.from_item(to_plain(item)) for item in response.get("Items", [])]
 
 
-def get_thread(user_id: str, thread_id: str) -> dict | None:
+def get_thread(user_id: str, thread_id: str) -> ThreadRecord | None:
     """스레드 단건. PK가 (user_id, thread_id)라 남의 스레드는 애초에 조회되지 않는다."""
     item = get_chat_threads_table().get_item(
         Key={"user_id": user_id, "thread_id": thread_id},
         # 생성(201) 직후 바로 온 전송이 EC 읽기로 404 나지 않게 — 단건이라 비용 무시 가능
         ConsistentRead=True,
     ).get("Item")
-    return to_plain(item) if item is not None else None
+    if item is None:
+        return None
+    return ThreadRecord.from_item(to_plain(item))
 
 
-def put_thread(item: dict) -> None:
-    """스레드 신규 생성 — None 필드는 속성 자체를 빼고 저장한다(sparse).
-
-    NULL 타입으로 저장하면 if_not_exists가 NULL을 '있는 값'으로 보고 title을
-    영영 채우지 못한다. 읽는 쪽은 전부 .get이라 부재와 null이 동치다.
-    """
-    stored = {key: value for key, value in item.items() if value is not None}
-    get_chat_threads_table().put_item(Item=to_storable(stored))
+def put_thread(record: ThreadRecord) -> None:
+    """스레드 신규 생성 — sparse 저장 규칙(None 필드 제외)은 레코드 to_item이 안다."""
+    get_chat_threads_table().put_item(Item=to_storable(record.to_item()))
 
 
 def delete_thread(user_id: str, thread_id: str) -> None:
@@ -188,15 +186,15 @@ def messages_after(thread_id: str, summary_upto: str | None) -> list[dict]:
         kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
-def count_unsummarized(thread_id: str, summary_upto: str | None) -> int:
-    """summary_upto 이후 메시지 수 — Select COUNT라 항목 본문을 전송받지 않는다.
+def count_messages(thread_id: str, after: str | None) -> int:
+    """after(ULID) 이후 메시지 수, None이면 전체 — Select COUNT라 항목 본문을 전송받지 않는다.
 
-    요약 임계 검사는 매 전송마다 돌므로 파티션 전체를 읽지 않는다. ULID 범위 조건으로
-    스캔 구간도 미요약 꼬리만으로 좁힌다 (파티션 전체 로드 → 꼬리 COUNT).
+    상한 검사(after=None)와 요약 임계 검사(after=summary_upto)가 함께 쓴다.
+    매 전송마다 돌므로 파티션 전체를 읽지 않고, ULID 범위 조건으로 스캔 구간도 좁힌다.
     """
     condition = Key("thread_id").eq(thread_id)
-    if summary_upto is not None:
-        condition = condition & Key("message_id").gt(summary_upto)
+    if after is not None:
+        condition = condition & Key("message_id").gt(after)
     total = 0
     kwargs = {"KeyConditionExpression": condition, "Select": "COUNT"}
     while True:

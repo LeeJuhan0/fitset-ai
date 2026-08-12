@@ -20,7 +20,7 @@ from app.chat.schemas import (
     ThreadCreated,
     ThreadOut,
 )
-from app.core import llm, ratelimit
+from app.core import clock, llm, ratelimit
 from app.core.config import get_settings
 from app.core.errors import (
     AiUnavailableError,
@@ -41,45 +41,24 @@ async def list_threads(user_id: str) -> list[ThreadOut]:
     """
     settings = get_settings()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
-    active = domain.active_threads(threads, domain.now_utc())[: settings.max_threads_per_user]
-    return [
-        ThreadOut(
-            thread_id=thread["thread_id"],
-            title=thread.get("title"),
-            last_message_at=thread.get("last_message_at"),
-        )
-        for thread in active
-    ]
+    active = domain.active_threads(threads, clock.now_utc())[: settings.max_threads_per_user]
+    return [ThreadOut.model_validate(thread, from_attributes=True) for thread in active]
 
 
 async def create_thread(user_id: str) -> ThreadCreated:
     """스레드 생성 — 정원(5개) 초과 시 가장 오래 미활동한 스레드를 지우고 만든다 (§3)."""
     settings = get_settings()
-    now = domain.now_utc()
+    now = clock.now_utc()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
     active = domain.active_threads(threads, now)
 
     for victim in domain.overflow_threads(active, settings.max_threads_per_user):
-        logger.info("thread quota exceeded, evicting %s", victim["thread_id"])
-        await _purge_thread(user_id, victim["thread_id"])
+        logger.info("thread quota exceeded, evicting %s", victim.thread_id)
+        await _purge_thread(user_id, victim.thread_id)
 
-    thread_id = domain.new_ulid(now)
-    created_at = domain.iso_utc(now)
-    await asyncio.to_thread(
-        repository.put_thread,
-        {
-            "user_id": user_id,
-            "thread_id": thread_id,
-            "title": None,
-            "summary_text": None,
-            "summary_upto": None,
-            "last_message_at": None,
-            # 빈 스레드도 방치되면 지워지도록 생성 시각 기준으로 TTL을 건다
-            "expires_at": domain.ttl_epoch(now, settings.thread_ttl_days),
-            "created_at": created_at,
-        },
-    )
-    return ThreadCreated(thread_id=thread_id, created_at=created_at)
+    record = domain.ThreadRecord.open(user_id, now, settings.thread_ttl_days)
+    await asyncio.to_thread(repository.put_thread, record)
+    return ThreadCreated(thread_id=record.thread_id, created_at=record.created_at)
 
 
 async def delete_thread(user_id: str, thread_id: str) -> None:
@@ -116,7 +95,7 @@ class _Turn:
 
 
 async def send_message_stream(user_id: str, thread_id: str, content: str):
-    """메시지 전송 SSE 턴 (§4.6) — ("delta", str)·("done", MessageSendData)·("error", 예외)를 낸다.
+    """메시지 전송 SSE 턴 (§4.6) — (StreamKind, 값) 튜플을 낸다 (DELTA=str, DONE=MessageSendData, ERROR=예외).
 
     검증과 유저 메시지 저장은 첫 이벤트 전에 끝난다 — 라우터가 첫 이벤트를 미리 당기므로
     여기서 던진 도메인 예외(404·409·429)와 첫 delta 전의 실패는 HTTP JSON으로 나간다.
@@ -126,18 +105,19 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
 
     result = None
     try:
+        # graph 이벤트 2종 — DELTA(본문 조각)는 그대로 흘리고, 마지막 RESULT(AgentResult)만 잡는다
         async for kind, value in graph.run_turn_stream(user_id, turn.system_prompt, turn.history):
-            if kind == "delta":
-                yield "delta", value
-            else:
-                result = value
+            if kind == graph.GraphEvent.DELTA:
+                yield domain.StreamKind.DELTA, value
+                continue
+            result = value
     except Exception:
         logger.exception("agent stream failed")
         result = None
     if result is None:
         # 실패 턴은 assistant를 저장하지 않는다 — user 메시지는 남는다(§4.6 규약 5, 멱등성 ⑧)
         turn.cancel_title()
-        yield "error", AiUnavailableError()
+        yield domain.StreamKind.ERROR, AiUnavailableError()
         return
 
     try:
@@ -145,9 +125,9 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
     except Exception:
         # 본문은 이미 흘러갔다 — 저장 실패를 숨기지 않고 error로 알린다(클라는 재시도 UI)
         logger.exception("assistant persist failed")
-        yield "error", DomainError()
+        yield domain.StreamKind.ERROR, DomainError()
         return
-    yield "done", data
+    yield domain.StreamKind.DONE, data
 
 
 async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
@@ -162,28 +142,31 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
         asyncio.to_thread(repository.get_user_summary, user_id),
         asyncio.to_thread(repository.recent_messages, thread_id, settings.chat_context_turns),
         # 상한 검사용 전체 수 — COUNT 쿼리(키만 스캔)라 상한값 이상 커지지 않는다
-        asyncio.to_thread(repository.count_unsummarized, thread_id, None),
+        asyncio.to_thread(repository.count_messages, thread_id, None),
     )
     if total_messages >= settings.max_messages_per_thread:
         raise ThreadFullError()
 
-    now = domain.now_utc()
-    await asyncio.to_thread(repository.put_message, {
-        "thread_id": thread_id,
-        "message_id": domain.new_ulid(now),
-        "user_id": user_id,
-        "role": "user",
-        "content": content,
-        "response_scheme": None,
-        "payload": None,
-        "created_at": domain.iso_utc(now),
-    })
+    now = clock.now_utc()
+    await asyncio.to_thread(
+        repository.put_message,
+        {
+            "thread_id": thread_id,
+            "message_id": domain.new_ulid(now),
+            "user_id": user_id,
+            "role": "user",
+            "content": content,
+            "response_scheme": None,
+            "payload": None,
+            "created_at": clock.iso_utc(now),
+        },
+    )
 
     return _Turn(
-        system_prompt=prompts.chat_system(user_summary, thread.get("summary_text")),
+        system_prompt=prompts.chat_system(user_summary, thread.summary_text),
         history=[*_to_lc_messages(recent), HumanMessage(content=content)],
         # 제목이 없으면 첫 발화 기준으로 만든다 — 에이전트 스트림과 병렬이라 지연이 늘지 않는다
-        title_task=asyncio.create_task(_make_title(content)) if thread.get("title") is None else None,
+        title_task=asyncio.create_task(_make_title(content)) if thread.title is None else None,
     )
 
 
@@ -193,7 +176,7 @@ async def _persist_answer(
     """assistant 메시지 저장과 활동 갱신 — done 이벤트에 실을 payload를 만든다."""
     settings = get_settings()
     title = await turn.title()
-    answered_at = domain.now_utc()
+    answered_at = clock.now_utc()
     assistant_message = {
         "thread_id": thread_id,
         "message_id": domain.new_ulid(answered_at),
@@ -202,14 +185,14 @@ async def _persist_answer(
         "content": result.content,
         "response_scheme": result.response_scheme,
         "payload": result.payload,
-        "created_at": domain.iso_utc(answered_at),
+        "created_at": clock.iso_utc(answered_at),
     }
     await asyncio.to_thread(repository.put_message, assistant_message)
     await asyncio.to_thread(
         repository.touch_thread,
         user_id,
         thread_id,
-        domain.iso_utc(answered_at),
+        clock.iso_utc(answered_at),
         domain.ttl_epoch(answered_at, settings.thread_ttl_days),
         title,
     )
@@ -228,7 +211,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
     # 임계 검사는 COUNT 쿼리 — 매 전송마다 도는 경로라 파티션 전체를 읽지 않는다
     pending = await asyncio.to_thread(
-        repository.count_unsummarized, thread_id, thread.get("summary_upto")
+        repository.count_messages, thread_id, thread.summary_upto
     )
     if not domain.needs_summary(pending, settings.summary_trigger_turns):
         return None
@@ -236,13 +219,13 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     # 임계 도달 시에만 미요약 꼬리를 읽는다 — 재요약은 (기존 요약 + 신규 메시지)의
     # 증분 병합이라 전체 대화를 실을 이유가 없다 (프롬프트가 O(대화 길이)로 커진다)
     fresh = await asyncio.to_thread(
-        repository.messages_after, thread_id, thread.get("summary_upto")
+        repository.messages_after, thread_id, thread.summary_upto
     )
     if not fresh:
         return None
 
     transcript = "\n".join(f"{item['role']}: {item.get('content', '')}" for item in fresh)
-    system, user = prompts.summarize_thread(thread.get("summary_text"), transcript)
+    system, user = prompts.summarize_thread(thread.summary_text, transcript)
     try:
         summary_text = await asyncio.to_thread(llm.complete, system, user, 600)
     except Exception:
@@ -263,15 +246,15 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
         logger.warning("user summary failed: %s", user_id, exc_info=True)
         return None
     await asyncio.to_thread(
-        repository.save_user_summary, user_id, merged.strip(), domain.iso_utc(domain.now_utc())
+        repository.save_user_summary, user_id, merged.strip(), clock.iso_utc(clock.now_utc())
     )
     return None
 
 
-async def _load_thread(user_id: str, thread_id: str) -> dict:
+async def _load_thread(user_id: str, thread_id: str) -> domain.ThreadRecord:
     """스레드 조회 + 만료 판정. PK가 (user_id, thread_id)라 타 유저 접근은 여기서 404가 된다."""
     thread = await asyncio.to_thread(repository.get_thread, user_id, thread_id)
-    if thread is None or domain.is_expired(thread, domain.now_utc()):
+    if thread is None or thread.is_expired(clock.now_utc()):
         raise ThreadNotFoundError()
     return thread
 
