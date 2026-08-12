@@ -9,6 +9,7 @@ import pytest
 from moto import mock_aws
 
 from app.chat import repository
+from app.chat.domain import ThreadRecord
 from app.core import dynamo
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -64,17 +65,13 @@ def tables(monkeypatch):
     _clear_caches()
 
 
-def _thread(thread_id: str = "01THREAD") -> dict:
-    return {
-        "user_id": USER_ID,
-        "thread_id": thread_id,
-        "title": None,
-        "summary_text": None,
-        "summary_upto": None,
-        "last_message_at": None,
-        "expires_at": FAR_FUTURE,
-        "created_at": "2026-07-29T12:00:00Z",
-    }
+def _thread(thread_id: str = "01THREAD") -> ThreadRecord:
+    return ThreadRecord(
+        user_id=USER_ID,
+        thread_id=thread_id,
+        expires_at=FAR_FUTURE,
+        created_at="2026-07-29T12:00:00Z",
+    )
 
 
 def _message(message_id: str) -> dict:
@@ -124,7 +121,7 @@ def test_touch_thread_first_title_wins(tables):
     repository.put_thread(_thread())
     repository.touch_thread(USER_ID, "01THREAD", "t1", FAR_FUTURE, "먼저 온 제목")
     repository.touch_thread(USER_ID, "01THREAD", "t2", FAR_FUTURE, "나중 온 제목")
-    assert repository.get_thread(USER_ID, "01THREAD")["title"] == "먼저 온 제목"
+    assert repository.get_thread(USER_ID, "01THREAD").title == "먼저 온 제목"
 
 
 def test_save_summary_ignores_stale_upto(tables):
@@ -134,8 +131,8 @@ def test_save_summary_ignores_stale_upto(tables):
     repository.save_summary(USER_ID, "01THREAD", "최신 요약", "01MSGB")
     repository.save_summary(USER_ID, "01THREAD", "묵은 요약", "01MSGA")
     thread = repository.get_thread(USER_ID, "01THREAD")
-    assert thread["summary_upto"] == "01MSGB"
-    assert thread["summary_text"] == "최신 요약"
+    assert thread.summary_upto == "01MSGB"
+    assert thread.summary_text == "최신 요약"
 
 
 def test_save_summary_sets_initial_and_advances(tables):
@@ -144,8 +141,8 @@ def test_save_summary_sets_initial_and_advances(tables):
     repository.save_summary(USER_ID, "01THREAD", "첫 요약", "01MSGA")
     repository.save_summary(USER_ID, "01THREAD", "둘째 요약", "01MSGB")
     thread = repository.get_thread(USER_ID, "01THREAD")
-    assert thread["summary_upto"] == "01MSGB"
-    assert thread["summary_text"] == "둘째 요약"
+    assert thread.summary_upto == "01MSGB"
+    assert thread.summary_text == "둘째 요약"
 
 
 def test_messages_after_returns_tail_in_order(tables):
@@ -158,13 +155,13 @@ def test_messages_after_returns_tail_in_order(tables):
     assert len(repository.messages_after("01THREAD", None)) == 5
 
 
-def test_count_unsummarized_counts_only_after_upto(tables):
-    # F6 — 임계 검사는 COUNT 쿼리로, summary_upto 이후 범위만 스캔한다
+def test_count_messages_counts_only_after_cursor(tables):
+    # F6 — 임계 검사는 COUNT 쿼리로, after(summary_upto) 이후 범위만 스캔한다
     for index in range(5):
         repository.put_message(_message(f"01MSG{index}"))
-    assert repository.count_unsummarized("01THREAD", None) == 5
-    assert repository.count_unsummarized("01THREAD", "01MSG2") == 2
-    assert repository.count_unsummarized("01THREAD", "01MSG4") == 0
+    assert repository.count_messages("01THREAD", None) == 5
+    assert repository.count_messages("01THREAD", "01MSG2") == 2
+    assert repository.count_messages("01THREAD", "01MSG4") == 0
 
 
 def test_messages_page_first_call_returns_latest_ascending(tables):
