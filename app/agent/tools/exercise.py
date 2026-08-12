@@ -1,18 +1,18 @@
-"""운동 가이드 툴 — 종목 수행 방법 설명 + 가이드 영상 presigned URL.
+"""운동 가이드 툴 — 종목 수행 방법 설명 + 가이드 영상 URL.
 
 종목 식별은 slug다. LLM이 slug를 지어낼 수 있으므로 **로컬 종목 마스터(206종)로 먼저
 검증·해석**하고, 통과한 slug만 내부 API로 상세를 조회한다 (guardrails와 같은 취지 —
 payload는 실존 데이터로만 채운다).
 
-영상 URL은 clients/s3가 요청 시점에 서명한다. 저장된 대화를 다시 열면 만료돼 있으므로
-클라는 클라이언트 API 명세 §6-B로 재발급받는다.
+영상은 공개 CloudFront라 URL에 만료가 없다(2026-08-06 개정 — presign 폐기).
+재생 실패 시 클라는 클라이언트 API 명세 §6-B로 재발급받는다.
 """
+import asyncio
 import logging
 
 from pydantic import BaseModel, Field
 
 from app.agent.tools import failures
-from app.clients.spring import get_spring_client
 from app.core.errors import DomainError
 from app.core.schemas import ResponseScheme
 from app.exercises import repository as exercise_catalog
@@ -54,9 +54,9 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     detail: dict = {}
     detail_fault = False
     try:
-        detail = await get_spring_client().get_exercise(slug)
+        detail = await asyncio.to_thread(exercise_catalog.get_exercise, slug)
     except DomainError as exc:
-        # 내부 API가 죽어도 로컬 마스터 이름만으로 답변은 가능하다
+        # 기록 DB가 죽어도 로컬 마스터 이름만으로 답변은 가능하다
         logger.warning("exercise detail lookup failed: %s", slug, exc_info=True)
         detail_fault = failures.is_server_fault(exc)
 

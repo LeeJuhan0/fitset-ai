@@ -6,7 +6,6 @@ import time
 
 import numpy as np
 
-from app.clients.spring import get_spring_client
 from app.core import llm, ratelimit
 from app.core.config import get_settings
 from app.core.errors import (
@@ -25,6 +24,8 @@ from app.routines.schemas import (
     RoutineOut,
     RoutineSetOut,
 )
+from app.users import repository as users_repository
+from app.workouts import repository as workouts_repository
 
 logger = logging.getLogger("fitset")
 
@@ -40,11 +41,11 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
 
     # ② goal이 프로필로 이동(2026-07-29, 명세 §1)해 쿼리 변환이 프로필에 의존한다 —
     # 프로필을 먼저 받고, 기록 조회와 변환 LLM만 병렬로 돌린다
-    # (직렬화 비용 = 내부망 프로필 1회분. 변환 LLM ~1초와의 병렬성은 유지)
-    profile = await get_spring_client().get_profile(user_id)
+    # (직렬화 비용 = 프로필 조회 1회분. 변환 LLM ~1초와의 병렬성은 유지)
+    profile = await asyncio.to_thread(users_repository.get_profile, user_id)
     goal = profile.get("goal") or domain.DEFAULT_GOAL
     workouts, analysis = await asyncio.gather(
-        get_spring_client().get_recent_workouts(user_id, settings.workout_days),
+        asyncio.to_thread(workouts_repository.get_recent_workouts, user_id, settings.workout_days),
         _analyze_query(request, goal),
     )
     query_description, parsed_avoided, unsafe_constraints = analysis

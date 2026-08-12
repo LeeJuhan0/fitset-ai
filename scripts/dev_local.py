@@ -1,11 +1,17 @@
 """로컬 실험 하네스 — 외부 의존을 가짜로 바꾸고 채팅 UI를 띄운다.
 
 대체되는 것: DynamoDB(chat·routines) → 인메모리, 스프링 내부 API → 가짜 유저 기록,
-S3 presign → 가짜 URL, JWT 인증 → 고정 유저. LLM(Bedrock Nova Lite)만 실제 호출한다.
+JWT 인증 → 고정 유저. LLM(Bedrock Nova Lite)만 실제 호출한다.
+
+LangSmith 트레이싱(선택): LANGSMITH_API_KEY가 있으면 자동으로 켜져 그래프·LLM 호출이
+smith.langchain.com 프로젝트 fitset-dev-local에 기록된다. 트레이스에 대화 내용이 그대로
+올라가므로 로컬 가짜 데이터 전용 — 프로덕션 태스크에는 이 키를 넣지 말 것.
+--fake-llm 모드는 LangChain을 거치지 않아 트레이스가 남지 않는다.
 
 사용:
     uv run python scripts/dev_local.py               # 실제 Bedrock 호출 (AWS 자격증명 필요)
     uv run python scripts/dev_local.py --fake-llm    # 자격증명 없이 UI·흐름만 확인
+    LANGSMITH_API_KEY=<키> uv run python scripts/dev_local.py   # + LangSmith 트레이싱
 
 브라우저: http://localhost:8000
 """
@@ -25,7 +31,10 @@ from fastapi.responses import FileResponse
 
 from app import deps
 from app.chat import repository
-from app.clients import s3, spring
+from app.chat.domain import ThreadRecord
+from app.exercises import repository as exercise_repository
+from app.users import repository as users_repository
+from app.workouts import repository as workouts_repository
 from app.core import llm
 from app.core.clock import iso_utc
 from app.main import app
@@ -50,16 +59,14 @@ class InMemoryChatStore:
         return [dict(m) for m in sorted(self.messages.get(thread_id, []), key=lambda m: m["message_id"])]
 
     def list_threads(self, user_id):
-        return [dict(t) for (uid, _), t in self.threads.items() if uid == user_id]
+        return [t.model_copy() for (uid, _), t in self.threads.items() if uid == user_id]
 
     def get_thread(self, user_id, thread_id):
         thread = self.threads.get((user_id, thread_id))
-        return dict(thread) if thread else None
+        return thread.model_copy() if thread else None
 
-    def put_thread(self, item):
-        self.threads[(item["user_id"], item["thread_id"])] = {
-            k: v for k, v in item.items() if v is not None
-        }
+    def put_thread(self, record):
+        self.threads[(record.user_id, record.thread_id)] = record.model_copy()
 
     def delete_thread(self, user_id, thread_id):
         self.threads.pop((user_id, thread_id), None)
@@ -68,17 +75,17 @@ class InMemoryChatStore:
         thread = self.threads.get((user_id, thread_id))
         if thread is None:
             return
-        thread["last_message_at"] = last_message_at
-        thread["expires_at"] = expires_at
-        if title is not None and thread.get("title") is None:
-            thread["title"] = title
+        thread.last_message_at = last_message_at
+        thread.expires_at = expires_at
+        if title is not None and thread.title is None:
+            thread.title = title
 
     def save_summary(self, user_id, thread_id, summary_text, summary_upto):
         thread = self.threads.get((user_id, thread_id))
-        if thread is None or (thread.get("summary_upto") or "") >= summary_upto:
+        if thread is None or (thread.summary_upto or "") >= summary_upto:
             return
-        thread["summary_text"] = summary_text
-        thread["summary_upto"] = summary_upto
+        thread.summary_text = summary_text
+        thread.summary_upto = summary_upto
 
     def messages_page(self, thread_id, limit, cursor=None):
         messages = self._sorted(thread_id)
@@ -97,8 +104,8 @@ class InMemoryChatStore:
             return messages
         return [m for m in messages if m["message_id"] > summary_upto]
 
-    def count_unsummarized(self, thread_id, summary_upto):
-        return len(self.messages_after(thread_id, summary_upto))
+    def count_messages(self, thread_id, after):
+        return len(self.messages_after(thread_id, after))
 
     def put_message(self, item):
         self.messages.setdefault(item["thread_id"], []).append(dict(item))
@@ -162,20 +169,19 @@ def _fake_workouts(days=28):
 FAKE_WORKOUTS = _fake_workouts()
 
 
-def _install_fake_spring():
-    client = spring.get_spring_client()
-
-    async def get_profile(user_id):
+def _install_fake_backend():
+    """DB 직조회 함수들을 가짜 데이터로 대체한다 — 로컬은 MySQL 없이 돈다."""
+    def get_profile(user_id):
         return {
             "heightCm": 175.0, "weightKg": 72.4, "gender": "MALE",
             "birthDate": "1998-04-12", "goal": "hypertrophy",
             "level": "intermediate", "avoidBodyParts": [],
         }
 
-    async def get_recent_workouts(user_id, days):
+    def get_recent_workouts(user_id, days):
         return FAKE_WORKOUTS
 
-    async def get_exercise(slug):
+    def get_exercise(slug):
         meta = get_exercise_meta().get(slug) or {}
         return {
             "slug": slug,
@@ -185,7 +191,7 @@ def _install_fake_spring():
             "equipment": (meta.get("equipment") or ["unknown"])[0],
             "difficulty": meta.get("difficulty", "beginner"),
             "thumbnailUrl": f"https://cdn.local/exercises/{slug}/thumb.jpg",
-            "videoKey": f"exercises/{slug}/guide.mp4",
+            "videoUrl": f"https://cdn.local/exercises/{slug}/guide.mp4",
             "instructions": [
                 "시작 자세를 잡고 코어에 힘을 준다.",
                 "동작 구간 전체를 통제하며 내린다.",
@@ -193,7 +199,7 @@ def _install_fake_spring():
             ],
         }
 
-    async def get_body_weights(user_id, days):
+    def get_body_weights(user_id, days):
         points = []
         for week in range(24, -1, -1):
             moment = NOW - timedelta(weeks=week)
@@ -201,7 +207,7 @@ def _install_fake_spring():
             points.append({"measuredAt": iso_utc(moment), "weightKg": round(weight, 1)})
         return points
 
-    async def get_exercise_sets(user_id, slug, days):
+    def get_exercise_sets(user_id, slug, days):
         rows = []
         for session in FAKE_WORKOUTS:
             for exercise in session["exercises"]:
@@ -219,7 +225,7 @@ def _install_fake_spring():
                     })
         return rows
 
-    async def get_workout_sessions(user_id, days):
+    def get_workout_sessions(user_id, days):
         return [
             {
                 "id": session["id"],
@@ -233,12 +239,14 @@ def _install_fake_spring():
             for session in FAKE_WORKOUTS
         ]
 
-    client.get_profile = get_profile
-    client.get_recent_workouts = get_recent_workouts
-    client.get_exercise = get_exercise
-    client.get_body_weights = get_body_weights
-    client.get_exercise_sets = get_exercise_sets
-    client.get_workout_sessions = get_workout_sessions
+    users_repository.get_profile = get_profile
+    users_repository.get_body_weights = get_body_weights
+    workouts_repository.get_recent_workouts = get_recent_workouts
+    workouts_repository.get_exercise_sets = get_exercise_sets
+    workouts_repository.get_workout_sessions = get_workout_sessions
+    exercise_repository.get_exercise = get_exercise
+    # 카탈로그 캐시가 로컬에 없다 — 영상 URL도 가짜 CDN으로
+    exercise_repository.cdn_video_url = lambda slug: f"https://cdn.local/exercises/{slug}/guide.mp4"
 
 
 # ── 가짜 루틴 스토어 ──────────────────────────────────────────────────
@@ -344,19 +352,17 @@ def patch_everything(fake_llm: bool):
     for name in (
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
         "save_summary", "messages_page", "recent_messages", "messages_after",
-        "count_unsummarized", "put_message", "delete_messages",
+        "count_messages", "put_message", "delete_messages",
         "get_user_summary", "save_user_summary",
     ):
         setattr(repository, name, getattr(chat_store, name))
 
-    _install_fake_spring()
+    _install_fake_backend()
     _install_fake_routine_store()
 
     # 임베딩은 Cohere 모델 액세스 의존을 끊는다 — 로컬 랭킹 품질은 실험 대상 아님
     rng = np.random.default_rng(7)
     llm.embed_query = lambda text: rng.standard_normal(1024).astype(np.float32).tolist()
-
-    s3.presign_video = lambda key: (f"https://fake-s3.local/{key}?sig=dev", 3600)
 
     app.dependency_overrides[deps.get_current_user_id] = lambda: USER_ID
 
@@ -372,6 +378,17 @@ async def chat_page():
     return FileResponse(HTML_PATH)
 
 
+def enable_langsmith() -> bool:
+    """LANGSMITH_API_KEY가 있으면 LangSmith 트레이싱 환경변수를 채운다. 켜졌으면 True."""
+    if not os.environ.get("LANGSMITH_API_KEY"):
+        return False
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")   # 구 env 이름만 읽는 버전 대비
+    os.environ.setdefault("LANGSMITH_PROJECT", "fitset-dev-local")
+    os.environ.setdefault("LANGCHAIN_PROJECT", os.environ["LANGSMITH_PROJECT"])
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fake-llm", action="store_true", help="Bedrock 없이 캔드 응답으로 UI 확인")
@@ -381,6 +398,13 @@ def main():
     patch_everything(args.fake_llm)
     mode = "FAKE LLM" if args.fake_llm else "실제 Bedrock (Nova Lite)"
     print(f"\n▶ FitSet 로컬 챗봇 실험 — LLM: {mode}")
+    if enable_langsmith():
+        if args.fake_llm:
+            print("▶ LangSmith: 키는 있지만 --fake-llm은 LangChain을 안 거쳐 트레이스가 안 남음")
+        else:
+            print(f"▶ LangSmith 트레이싱 켜짐 — smith.langchain.com 프로젝트 {os.environ['LANGSMITH_PROJECT']}")
+    else:
+        print("▶ LangSmith 꺼짐 — 켜려면 LANGSMITH_API_KEY 환경변수 설정")
     print(f"▶ http://localhost:{args.port}\n")
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
 

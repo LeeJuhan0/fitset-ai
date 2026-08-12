@@ -26,15 +26,18 @@ class Settings(BaseSettings):
     exercise_catalog_table: str = "exercise_catalog"
     backend_exercises_url: str = "https://api.fitset.kro.kr/api/v1/exercises"   # 공개 API(무인증, 2026-08-05 실측)
 
-    # 운동 가이드 영상 — 1순위는 카탈로그의 CDN URL(무기한·무서명), 실패 시 presigned GET 폴백.
-    # 실제 업로드 위치 기준 (fitset-media 버킷은 미생성 — 2026-08-03 실측)
-    exercise_video_bucket: str = "fitset-exercise-media"
-    exercise_video_key_template: str = "videos/{slug}.mp4"   # 내부 API videoKey 미제공 시 폴백
-    presign_expires_seconds: int = 3600   # 1시간 — 폴백 URL에만 적용, 클라는 만료 시 §6-B로 재발급
+    # 최근 기록 조회 기간(일) — 루틴 생성의 무게 추천·홈트 판정 입력 구간
+    workout_days: int = 28
 
-    # 백엔드 내부 API (스프링)
-    spring_internal_base_url: str = "http://localhost:8080/internal"
-    workout_days: int = 28   # 최근 기록 조회 기간 — 내부 API days 파라미터
+    # 백엔드 MySQL 읽기 전용 직접 조회 (NL2SQL 툴, 이슈 #36) — 계정은 SELECT 권한만.
+    # host 미설정이면 툴이 비활성 안내로 물러난다 (로컬 기본). SG·계정 개통은 별도 수동 작업
+    mysql_host: str | None = None
+    mysql_port: int = 3306
+    mysql_user: str = "fitset_readonly"
+    mysql_password: str = ""
+    mysql_database: str = "fitset"
+    mysql_connect_timeout: int = 2
+    mysql_read_timeout: int = 5
 
     # 인증 (JWT RS256) — 백엔드가 게시한 JWKS 공개키로 검증, 로컬 개발은 PEM 직접 주입으로 우회
     # (로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증되지 않는다)
