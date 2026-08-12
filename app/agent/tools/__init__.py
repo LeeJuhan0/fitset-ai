@@ -1,9 +1,11 @@
 """툴 레지스트리 — 그래프가 바인딩할 스키마와 이름→실행 함수 매핑.
 
-툴은 3종이며 클라이언트 API 명세 §7의 payload 스킴과 1:1로 대응한다.
-  DrawChart          → chart
-  RecommendRoutine   → routine
-  GetExerciseGuide   → exerciseGif
+payload 스킴 툴 3종은 클라이언트 API 명세 §7과 1:1로 대응하고,
+QueryWorkoutHistory는 payload 없는 text 응답용 조회 툴이다.
+  DrawChart           → chart
+  RecommendRoutine    → routine
+  GetExerciseGuide    → exerciseGif
+  QueryWorkoutHistory → (text — 기록 DB 템플릿 조회, 이슈 #36)
 
 툴 이름은 bind_tools에 넘긴 pydantic 클래스명 그대로다 — prompts.CHAT_SYSTEM의
 도구 사용 규칙에 적힌 이름과 반드시 일치해야 한다.
@@ -17,18 +19,24 @@ import logging
 
 from pydantic import ValidationError
 
-from app.agent.tools import chart, exercise, routine
+from app.agent.tools import chart, exercise, history, routine
 
 logger = logging.getLogger("fitset")
 
 # bind_tools에 넘기는 pydantic 스키마 — 클래스 docstring이 툴 설명이 된다
-TOOL_SCHEMAS = [chart.DrawChart, routine.RecommendRoutine, exercise.GetExerciseGuide]
+TOOL_SCHEMAS = [
+    chart.DrawChart,
+    routine.RecommendRoutine,
+    exercise.GetExerciseGuide,
+    history.QueryWorkoutHistory,
+]
 
 # LLM이 부르는 툴 이름(=스키마 클래스명) → 실행 함수
 TOOL_RUNNERS = {
     chart.DrawChart.__name__: chart.run,
     routine.RecommendRoutine.__name__: routine.run,
     exercise.GetExerciseGuide.__name__: exercise.run,
+    history.QueryWorkoutHistory.__name__: history.run,
 }
 
 
