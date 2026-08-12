@@ -1,6 +1,6 @@
-"""종목 카탈로그 저장소 — 백엔드 마스터 캐시(`exercise_catalog`)를 읽는 유일한 곳.
+"""종목 저장소 — 카탈로그 캐시(`exercise_catalog`)와 백엔드 MySQL 종목 마스터 직조회.
 
-담는 것은 AI 서버가 자체 생성할 수 없는 값뿐이다 — 백엔드 UUID(`exerciseId`),
+카탈로그가 담는 것은 AI 서버가 자체 생성할 수 없는 값뿐이다 — 백엔드 UUID(`exerciseId`),
 종목 수행 방식(`exerciseType`), CDN 썸네일·영상 URL. 종목의 나머지 정보(한글명·부위·장비·수행 방법)는 repo 동봉
 metadata(206종)가 정본이므로 중복 저장하지 않는다.
 
@@ -8,8 +8,9 @@ metadata(206종)가 정본이므로 중복 저장하지 않는다.
 — 206건짜리 정적 카탈로그라 스냅샷으로 충분하지만, 배치가 갱신해도 재시작 전까지
 반영되지 않는다(루틴 스토어와 같은 성격, 감사 F16).
 
-카탈로그가 비어 있어도(배치 미실행·조회 실패) 서버는 정상 동작한다 — 그 경우 exerciseId는
-null, 영상은 presigned URL 폴백으로 강등된다. 부팅을 막을 만큼 치명적인 데이터가 아니다.
+카탈로그가 비어 있어도(배치 미실행·조회 실패) 서버는 정상 동작한다 — 그 경우 exerciseId·
+영상 URL이 null로 강등될 뿐이다(2026-08-12 내부 API 파기로 카탈로그가 URL 유일 출처).
+부팅을 막을 만큼 치명적인 데이터가 아니다.
 """
 import json
 import logging
@@ -17,8 +18,13 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from sqlalchemy import select
+
+from app.clients import mysql
 from app.core.config import get_settings
 from app.core.dynamo import get_exercise_catalog_table, to_plain
+from app.core.errors import ExerciseNotFoundError
+from app.exercises.domain import Equipment, Exercise, ExerciseMuscle, Muscle
 
 logger = logging.getLogger("fitset")
 
@@ -55,7 +61,7 @@ def exercise_type(slug: str) -> str | None:
 
 
 def cdn_video_url(slug: str) -> str | None:
-    """종목 slug → CDN 영상 URL(무서명·무기한). 캐시 미스면 None — presign 폴백."""
+    """종목 slug → CDN 영상 URL(무서명·무기한). 캐시 미스면 None — 종목 마스터 videoUrl 폴백."""
     return (get_exercise_catalog().get(slug) or {}).get("video_url")
 
 
@@ -123,3 +129,38 @@ def exercise_name(slug: str) -> str | None:
     if entry is None:
         return None
     return entry.get("name_ko") or entry.get("name")
+
+
+def get_exercise(slug: str) -> dict:
+    """종목 마스터 상세 — 백엔드 MySQL 직조회 (구 내부 API §4.3 승계).
+
+    반환 형태는 구 spring 클라이언트와 동일. 썸네일·영상 URL은 DB에 컬럼이 없어(2026-08-12 ERD)
+    카탈로그 캐시에서 채운다. 동기 — 호출부가 asyncio.to_thread로 감싼다.
+    """
+    rows = mysql.fetch_all(
+        select(Exercise.id, Exercise.name, Exercise.difficulty, Exercise.instructions, Equipment.slug.label("equipment"))
+        .join(Equipment, Equipment.id == Exercise.equipment_id)
+        .where(Exercise.slug == slug)
+    )
+    if not rows:
+        raise ExerciseNotFoundError()
+    row = rows[0]
+
+    muscles = mysql.fetch_all(
+        select(ExerciseMuscle.role, Muscle.slug)
+        .select_from(ExerciseMuscle)
+        .join(Muscle, Muscle.id == ExerciseMuscle.muscle_id)
+        .where(ExerciseMuscle.exercise_id == row["id"])
+        .order_by(Muscle.slug)
+    )
+    return {
+        "slug": slug,
+        "name": row["name"],
+        "primaryMuscles": [m["slug"] for m in muscles if m["role"] == "PRIMARY"],
+        "secondaryMuscles": [m["slug"] for m in muscles if m["role"] == "SECONDARY"],
+        "equipment": row["equipment"],
+        "difficulty": mysql.camel_enum(row["difficulty"]),
+        "instructions": row["instructions"] or [],
+        "thumbnailUrl": cdn_thumbnail_url(slug),
+        "videoUrl": cdn_video_url(slug),
+    }
