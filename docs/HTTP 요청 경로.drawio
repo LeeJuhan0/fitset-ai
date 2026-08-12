@@ -1,0 +1,43 @@
+<mxfile host="app.diagrams.net" modified="2026-08-05T00:00:00.000Z" agent="claude" version="24.0.0">
+  <diagram id="http-request-path" name="HTTP 요청 경로">
+    <mxGraphModel dx="900" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="n1" value="&lt;b&gt;1. 클라이언트가 만드는 HTTP 요청 원문 (평문)&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;POST /ai/v1/threads/01J.../messages HTTP/1.1&lt;/font&gt;  ← 스타트라인 (메서드+경로+버전)&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;Host: api.fitset.kro.kr&lt;/font&gt;  ← 헤더&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;Authorization: Bearer eyJhbGci...&lt;/font&gt;&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;Content-Type: application/json&lt;/font&gt;&lt;br&gt;(빈 줄)&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;{&quot;content&quot;: &quot;안녕&quot;}&lt;/font&gt;  ← 바디" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="85" y="40" width="680" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="HTTPS — TLS 암호화, 원문 전체가 암호문으로" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontStyle=1" edge="1" parent="1" source="n1" target="n2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="&lt;b&gt;2. ALB (hangang-alb)&lt;/b&gt;&lt;br&gt;&lt;br&gt;TLS 종료 — 암호문을 다시 평문으로&lt;br&gt;스타트라인 경로 + Host 헤더를 리스너 규칙과 대조&lt;br&gt;/ai/* → AI 서버 대상 그룹, 그 외 → 백엔드 대상 그룹" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="85" y="280" width="680" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="HTTP 평문 (VPC 내부 구간)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontStyle=1" edge="1" parent="1" source="n2" target="n3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="&lt;b&gt;3. uvicorn — 바이트를 파이썬 객체화&lt;/b&gt;&lt;br&gt;&lt;br&gt;소켓 바이트 파싱 → ASGI scope 딕셔너리&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;{ 'method': 'POST', 'path': '/ai/v1/threads/01J.../messages',&lt;br&gt;&amp;nbsp;&amp;nbsp;'headers': [(b'authorization', b'Bearer ...'), ...] }&lt;/font&gt;&lt;br&gt;바디는 아직 안 읽은 스트림으로 보관" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="85" y="470" width="680" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="scope + 바디 스트림을 app 객체에 전달" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontStyle=1" edge="1" parent="1" source="n3" target="n4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="&lt;b&gt;4. FastAPI 미들웨어&lt;/b&gt;&lt;br&gt;&lt;br&gt;traceId 발급 (요청에 X-Trace-Id 헤더 있으면 이어받기)&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;trace_id_var.set(traceId)&lt;/font&gt; → ContextVar에 저장" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="85" y="680" width="680" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="await call_next(request)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontStyle=1" edge="1" parent="1" source="n4" target="n5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="&lt;b&gt;5. 라우터&lt;/b&gt;&lt;br&gt;&lt;br&gt;scope의 경로를 등록 패턴과 대조&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;POST /ai/v1/threads/{threadId}/messages&lt;/font&gt; 매칭, threadId = '01J...' 추출" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+          <mxGeometry x="85" y="850" width="680" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="n5" target="n6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" value="&lt;b&gt;6. path operation 함수 send_message 실행&lt;/b&gt;&lt;br&gt;&lt;br&gt;thread_id ← 경로 파라미터&lt;br&gt;content ← 바디를 이 시점에 읽어 pydantic 검증&lt;br&gt;user_id ← Authorization 헤더 JWT 검증 (Depends)" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="85" y="1020" width="680" height="120" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
