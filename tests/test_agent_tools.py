@@ -97,17 +97,14 @@ async def test_routine_server_fault_forbids_account_blame(monkeypatch):
 
 
 async def test_chart_server_fault_forbids_account_blame(monkeypatch):
-    from types import SimpleNamespace
-
     from app.agent.tools import chart
     from app.charts import service as charts_service
     from app.core.errors import DomainError
 
-    async def fail_body_weights(user_id, days):
-        raise DomainError("내부 API 호출에 실패했습니다.")
+    def fail_body_weights(user_id, days):
+        raise DomainError("기록 DB 조회에 실패했습니다.")
 
-    stub = SimpleNamespace(get_body_weights=fail_body_weights)
-    monkeypatch.setattr(charts_service, "get_spring_client", lambda: stub)
+    monkeypatch.setattr(charts_service.users_repository, "get_body_weights", fail_body_weights)
     text, artifact = await chart.run(USER_ID, {"metric": "bodyWeight"})
     assert artifact is None
     assert "서버 일시 장애" in text

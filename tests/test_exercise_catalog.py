@@ -1,7 +1,7 @@
 """종목 카탈로그 저장소·동기화 배치 테스트 — 백엔드 마스터 캐시(2026-08-05 신설).
 
 카탈로그는 있으면 좋고 없어도 서버가 도는 보조 데이터다. 조회 실패·미적재가
-부팅이나 요청을 깨뜨리지 않고 폴백(exerciseId null, presign 영상)으로 강등되는지 본다.
+부팅이나 요청을 깨뜨리지 않고 폴백(exerciseId null, 종목 마스터 videoUrl)으로 강등되는지 본다.
 """
 import sys
 from pathlib import Path
@@ -69,7 +69,7 @@ def test_build_items_keeps_only_joined_slugs():
     items = build_items(BACKEND_SAMPLE, {"barbell-bench-press", "push-up"})
     assert [i["slug"] for i in items] == ["barbell-bench-press", "push-up"]
     assert items[0]["exercise_id"] == "11f18f47-0001-0000-8072-021f94ad3563"
-    assert items[1]["video_url"] is None   # 영상 미등록 — presign 폴백 대상
+    assert items[1]["video_url"] is None   # 영상 미등록 — 종목 마스터 videoUrl 폴백 대상
 
 
 def test_catalog_lookup_returns_uuid_and_cdn_urls(catalog_table):
@@ -136,7 +136,7 @@ def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
 
 @pytest.fixture
 def catalog_only(monkeypatch):
-    """카탈로그만 채우고 S3·내부 API는 대역으로 — 영상 URL 출처 분기 검증용."""
+    """카탈로그만 채우고 내부 API는 대역으로 — 영상 URL 출처 분기 검증용."""
     monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
         "barbell-bench-press": {
             "slug": "barbell-bench-press",
@@ -145,8 +145,6 @@ def catalog_only(monkeypatch):
         },
         "push-up": {"slug": "push-up", "exercise_id": "11f18f47-0002-0000-8072-021f94ad3563"},
     })
-    from app.clients import s3
-    monkeypatch.setattr(s3, "presign_video", lambda key: (f"https://s3.example/{key}?sig=x", 3600))
 
 
 async def test_video_prefers_cdn_without_expiry(catalog_only):
@@ -158,32 +156,23 @@ async def test_video_prefers_cdn_without_expiry(catalog_only):
     assert video["exerciseId"].endswith("021f94ad3563")
 
 
-async def test_video_falls_back_to_presign_on_request(catalog_only, monkeypatch):
-    # 클라가 CDN 재생 실패로 fallback=true를 요청하면 서명 URL + 만료로 강등
-    from app.clients import spring
+async def test_video_fallback_rereads_catalog(catalog_only):
+    # 재발급(fallback=true)도 같은 카탈로그 CDN을 다시 읽는다 —
+    # 구 폴백(내부 API §4.3 videoUrl)은 내부 API 파기(2026-08-12)로 소멸
     from app.exercises import service as exercises_service
-
-    async def fake_detail(slug):
-        return {"videoKey": f"videos/{slug}.mp4"}
-    monkeypatch.setattr(spring.get_spring_client(), "get_exercise", fake_detail)
 
     video = await exercises_service.get_video("barbell-bench-press", fallback=True)
-    assert video["videoUrl"].startswith("https://s3.example/")
-    assert video["expiresAt"].endswith("Z")
+    assert video["videoUrl"].startswith("https://cdn.example/")
+    assert video["expiresAt"] is None            # 공개 CDN — 만료 없음
 
 
-async def test_video_uses_presign_when_catalog_has_no_url(catalog_only, monkeypatch):
-    # 카탈로그에 영상이 없는 종목 — fallback 요청이 없어도 자동으로 presign 경로
-    from app.clients import spring
+async def test_video_missing_in_catalog_is_not_found(catalog_only):
+    # 카탈로그에 영상이 없는 종목 — 대체 출처가 없으므로 영상 없음으로 끝난다
+    from app.core.errors import VideoNotFoundError
     from app.exercises import service as exercises_service
 
-    async def fake_detail(slug):
-        return {"videoKey": f"videos/{slug}.mp4"}
-    monkeypatch.setattr(spring.get_spring_client(), "get_exercise", fake_detail)
-
-    video = await exercises_service.get_video("push-up")
-    assert video["videoUrl"].startswith("https://s3.example/")
-    assert video["expiresAt"] is not None
+    with pytest.raises(VideoNotFoundError):
+        await exercises_service.get_video("push-up")
 
 
 def _routine_with(slug: str) -> dict:
