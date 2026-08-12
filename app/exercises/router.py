@@ -17,10 +17,10 @@ router = APIRouter(
 @router.get("/exercises/{slug}/video", response_model=ApiResponse[ExerciseVideoOut])
 async def reissue_video_url(
     slug: str,
-    # CDN URL로 재생이 안 될 때만 true — 비공개 버킷 presigned URL(1시간)로 강등 발급한다
+    # CDN URL로 재생이 안 될 때만 true — 종목 마스터의 videoUrl로 다시 조회해 발급한다
     fallback: bool = Query(default=False),
     trace_id: str = Depends(deps.get_trace_id),
 ) -> ApiResponse[ExerciseVideoOut]:
-    """가이드 영상 재생 URL을 돌려준다. 기본은 CDN, fallback=true면 presigned URL."""
+    """가이드 영상 재생 URL을 돌려준다. 기본은 CDN, fallback=true면 종목 마스터 재조회."""
     video = await service.get_video(slug, fallback=fallback)
     return ApiResponse(trace_id=trace_id, data=ExerciseVideoOut(**video))

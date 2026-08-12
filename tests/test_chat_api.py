@@ -4,7 +4,9 @@ DynamoDB·Bedrock은 대체한다. 검증 대상은 계약이다:
 {traceId, data} 봉투, camelCase 와이어, 목록의 page 부재, 메시지 목록 커서(§4.5),
 메시지 전송 SSE 이벤트 3종(§4.6), 204 본문 없음, §7 payload 계약.
 """
+import asyncio
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 from app import deps
 from app.agent import graph
 from app.chat import repository, service
+from app.chat.domain import ThreadRecord
 from app.core import llm, ratelimit
 from app.main import app
 
@@ -22,35 +25,35 @@ class FakeStore:
     """스레드·메시지·요약을 메모리에 담는 repository 대역."""
 
     def __init__(self):
-        self.threads: dict[tuple[str, str], dict] = {}
+        self.threads: dict[tuple[str, str], ThreadRecord] = {}
         self.messages: dict[str, list[dict]] = {}
         self.user_summaries: dict[str, str] = {}
         self.list_messages_calls = 0   # F6 검증용 — 파티션 전체 읽기 횟수
 
     def list_threads(self, user_id):
-        return [dict(t) for (uid, _), t in self.threads.items() if uid == user_id]
+        return [t.model_copy() for (uid, _), t in self.threads.items() if uid == user_id]
 
     def get_thread(self, user_id, thread_id):
         thread = self.threads.get((user_id, thread_id))
-        return dict(thread) if thread else None
+        return thread.model_copy() if thread else None
 
-    def put_thread(self, item):
-        self.threads[(item["user_id"], item["thread_id"])] = dict(item)
+    def put_thread(self, record):
+        self.threads[(record.user_id, record.thread_id)] = record.model_copy()
 
     def delete_thread(self, user_id, thread_id):
         self.threads.pop((user_id, thread_id), None)
 
     def touch_thread(self, user_id, thread_id, last_message_at, expires_at, title=None):
         thread = self.threads[(user_id, thread_id)]
-        thread["last_message_at"] = last_message_at
-        thread["expires_at"] = expires_at
+        thread.last_message_at = last_message_at
+        thread.expires_at = expires_at
         if title is not None:
-            thread["title"] = title
+            thread.title = title
 
     def save_summary(self, user_id, thread_id, summary_text, summary_upto):
         thread = self.threads[(user_id, thread_id)]
-        thread["summary_text"] = summary_text
-        thread["summary_upto"] = summary_upto
+        thread.summary_text = summary_text
+        thread.summary_upto = summary_upto
 
     def _sorted_messages(self, thread_id):
         # 내부 공용 — messages_page를 거치면 F6 카운터가 오염된다
@@ -68,11 +71,11 @@ class FakeStore:
         next_cursor = page[0]["message_id"] if len(messages) > limit else None
         return page, next_cursor
 
-    def count_unsummarized(self, thread_id, summary_upto):
+    def count_messages(self, thread_id, after):
         messages = self.messages.get(thread_id, [])
-        if summary_upto is None:
+        if after is None:
             return len(messages)
-        return sum(1 for m in messages if m["message_id"] > summary_upto)
+        return sum(1 for m in messages if m["message_id"] > after)
 
     def messages_after(self, thread_id, summary_upto):
         messages = self._sorted_messages(thread_id)
@@ -103,11 +106,9 @@ def store(monkeypatch):
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
         "save_summary", "messages_page", "recent_messages", "put_message",
         "delete_messages", "get_user_summary", "save_user_summary",
+        "count_messages", "messages_after",
     ):
         monkeypatch.setattr(repository, name, getattr(fake, name))
-    # raising=False — F6 수정 전에는 repository에 없는 이름이라 테스트 수집이 깨지지 않게
-    monkeypatch.setattr(repository, "count_unsummarized", fake.count_unsummarized, raising=False)
-    monkeypatch.setattr(repository, "messages_after", fake.messages_after, raising=False)
     # 레이트리미터는 프로세스 전역 캐시 — 앞 테스트가 소비한 토큰이 새지 않게 초기화
     ratelimit.chat_limiter.cache_clear()
     ratelimit.routine_limiter.cache_clear()
@@ -277,11 +278,10 @@ def test_message_length_is_validated(client):
 
 def _seed_thread(store, thread_id):
     """정원 경쟁의 사후 상태를 만든다 — create API를 거치지 않고 직접 심는다."""
-    store.put_thread({
-        "user_id": USER_ID, "thread_id": thread_id, "title": None,
-        "summary_text": None, "summary_upto": None, "last_message_at": None,
-        "expires_at": 4102444800, "created_at": "2026-07-29T00:00:00Z",
-    })
+    store.put_thread(ThreadRecord(
+        user_id=USER_ID, thread_id=thread_id,
+        expires_at=4102444800, created_at="2026-07-29T00:00:00Z",
+    ))
 
 
 def test_thread_list_caps_at_quota_even_after_race(client, store):
@@ -349,8 +349,8 @@ async def test_refresh_summarizes_only_unsummarized_tail(store, monkeypatch):
 
     monkeypatch.setattr(llm, "complete", fake_complete)
     _seed_thread(store, "01TX")
-    store.threads[(USER_ID, "01TX")]["summary_upto"] = "M0005"
-    store.threads[(USER_ID, "01TX")]["summary_text"] = "이전 요약"
+    store.threads[(USER_ID, "01TX")].summary_upto = "M0005"
+    store.threads[(USER_ID, "01TX")].summary_text = "이전 요약"
     store.messages["01TX"] = [
         {"thread_id": "01TX", "message_id": f"M{index:04d}", "user_id": USER_ID,
          "role": "user", "content": f"msg-{index}", "response_scheme": None,
@@ -362,7 +362,7 @@ async def test_refresh_summarizes_only_unsummarized_tail(store, monkeypatch):
     await service.refresh_summaries(USER_ID, "01TX")
 
     assert store.list_messages_calls == 0                # 파티션 전체 로드 없음
-    assert store.threads[(USER_ID, "01TX")]["summary_upto"] == "M0015"
+    assert store.threads[(USER_ID, "01TX")].summary_upto == "M0015"
     assert "이전 요약" in captured[0]                     # 기존 요약과의 증분 병합
     assert "msg-6" in captured[0]
     assert "msg-3" not in captured[0]                    # 이미 요약된 구간은 재전송 안 함
@@ -400,3 +400,65 @@ def test_mid_stream_failure_emits_error_event(client, monkeypatch, store):
     assert data["traceId"]
     # 실패 턴은 assistant를 저장하지 않는다 — user 메시지만 남는다 (§4.6 규약 5)
     assert [m["role"] for m in store.messages[thread_id]] == ["user"]
+
+
+def test_sse_조각은_생성되는_즉시_나간다_버퍼링_없음(client, monkeypatch, store):
+    """스트리밍 증명 — delta가 모였다 한 번에 오지 않고 생성 간격 그대로 도착한다.
+
+    TestClient는 앱을 다 돌린 뒤 본문을 돌려줘 시간 축이 뭉개진다(실측 — 조각 3개가
+    한 덩어리로 도착). 그래서 진짜 uvicorn을 임시 포트에 띄워 실제 TCP 소켓으로 잰다.
+    스텁 LLM이 0.25초 간격으로 delta 3개를 낸다 — 버퍼링이면 도착 간격이 0에 가깝고,
+    조각마다 즉시 send되면 도착 간격이 생성 간격만큼 벌어진다. pytest -s 로 타임라인 확인.
+    """
+    import threading
+
+    import httpx
+    import uvicorn
+
+    delay = 0.25
+
+    async def slow_stream(user_id, system_prompt, history):
+        yield "delta", "조각1"
+        await asyncio.sleep(delay)
+        yield "delta", "조각2"
+        await asyncio.sleep(delay)
+        yield "delta", "조각3"
+        yield "result", graph.AgentResult("조각1조각2조각3", "text", None)
+
+    monkeypatch.setattr(graph, "run_turn_stream", slow_stream)
+
+    # lifespan="off" — 부팅 훅(루틴 스토어 Scan)이 실제 DynamoDB를 부르지 않게
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, lifespan="off", log_level="warning")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        port = server.servers[0].sockets[0].getsockname()[1]
+
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}") as http:
+            thread_id = http.post("/ai/v1/threads").json()["data"]["threadId"]
+            arrivals = []
+            started = time.perf_counter()
+            with http.stream(
+                "POST", f"/ai/v1/threads/{thread_id}/messages", json={"content": "스트리밍 되나요"}
+            ) as response:
+                for raw in response.iter_raw():
+                    arrivals.append((time.perf_counter() - started, raw.decode()))
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+    for at, chunk in arrivals:
+        print(f"\n  +{at*1000:6.0f}ms  {chunk.replace(chr(10), chr(92)+chr(110))[:60]}")
+
+    delta_times = [at for at, chunk in arrivals if "delta" in chunk]
+    assert len(delta_times) >= 3, "delta들이 한 덩어리로 왔다 — 버퍼링"
+    # 첫 조각은 마지막 delta 생성(2×delay)을 기다리지 않고 도착해야 한다
+    assert delta_times[0] < delay, "첫 delta가 늦게 왔다 — 어딘가에서 모으고 있다"
+    # 첫·끝 조각의 도착 간격이 생성 간격(2×delay)만큼 벌어져 있어야 한다
+    spread = delta_times[-1] - delta_times[0]
+    assert spread > delay * 1.5, f"delta들이 {spread:.3f}s 안에 몰려 도착 — 버퍼링 의심"

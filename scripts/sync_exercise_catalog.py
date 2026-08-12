@@ -103,7 +103,7 @@ def main() -> int:
     items = build_items(backend, slugs)
     missing_video = [i["slug"] for i in items if not i["video_url"]]
     print(f"백엔드 {len(backend)}종 · 로컬 {len(slugs)}종 → 적재 대상 {len(items)}종")
-    print(f"영상 URL 없는 종목: {len(missing_video)}종 (presign 폴백 대상)")
+    print(f"영상 URL 없는 종목: {len(missing_video)}종 (종목 마스터 videoUrl 폴백 대상)")
 
     if args.dry_run:
         print("dry-run — 적재 생략. 샘플:")
