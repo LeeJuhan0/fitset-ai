@@ -17,6 +17,7 @@ class ThreadOut(CamelModel):
     thread_id: str
     title: str | None             # 첫 발화 기반 자동 생성 — 첫 메시지 전이면 null
     last_message_at: str | None   # 빈 스레드면 null
+    needs_deletion: bool          # 보존 기한(14일) 경과 — 클라는 진입 시 삭제 안내를 띄운다(§2)
 
 
 class ThreadCreated(CamelModel):

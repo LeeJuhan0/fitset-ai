@@ -26,6 +26,7 @@ from app.core.errors import (
     AiUnavailableError,
     DomainError,
     RateLimitedError,
+    ThreadExpiredError,
     ThreadFullError,
     ThreadNotFoundError,
     ThreadQuotaExceededError,
@@ -35,24 +36,33 @@ logger = logging.getLogger("fitset")
 
 
 async def list_threads(user_id: str) -> list[ThreadOut]:
-    """스레드 목록 — 최대 10개, 최근 활동순, 만료 제외 (§2).
+    """스레드 목록 — 최대 10개, 최근 활동순 (§2).
 
+    만료 스레드도 숨기지 않고 needsDeletion을 켜서 내보낸다 — 항목 삭제는 유저 몫이다(§4).
     정원까지 잘라서 반환한다(read-repair) — 동시 생성 TOCTOU 경쟁으로 저장소에
-    11개가 생겨도 계약(최대 10)을 지키고, 초과분은 TTL 만료로 소멸한다.
+    11개가 생겨도 계약(최대 10)을 지킨다.
     """
-    settings = get_settings()
-    threads = await asyncio.to_thread(repository.list_threads, user_id)
-    active = domain.active_threads(threads, clock.now_utc())[: settings.max_threads_per_user]
-    return [ThreadOut.model_validate(thread, from_attributes=True) for thread in active]
-
-
-async def create_thread(user_id: str) -> ThreadCreated:
-    """스레드 생성 — 정원(10개) 도달 시 409로 거부, 삭제는 유저 몫이다 (§3)."""
     settings = get_settings()
     now = clock.now_utc()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
-    active = domain.active_threads(threads, now)
-    if len(active) >= settings.max_threads_per_user:
+    visible = domain.sorted_by_activity(threads)[: settings.max_threads_per_user]
+    return [
+        ThreadOut(
+            thread_id=thread.thread_id,
+            title=thread.title,
+            last_message_at=thread.last_message_at,
+            needs_deletion=thread.is_expired(now),
+        )
+        for thread in visible
+    ]
+
+
+async def create_thread(user_id: str) -> ThreadCreated:
+    """스레드 생성 — 정원(10개) 도달 시 409로 거부 (§3). 만료 스레드도 정원을 차지한다."""
+    settings = get_settings()
+    now = clock.now_utc()
+    threads = await asyncio.to_thread(repository.list_threads, user_id)
+    if len(threads) >= settings.max_threads_per_user:
         raise ThreadQuotaExceededError()
 
     record = domain.ThreadRecord.open(user_id, now, settings.thread_ttl_days)
@@ -61,15 +71,22 @@ async def create_thread(user_id: str) -> ThreadCreated:
 
 
 async def delete_thread(user_id: str, thread_id: str) -> None:
-    """스레드 + 소속 메시지 전체 삭제 (§4). 없거나 만료면 404."""
-    await _load_thread(user_id, thread_id)
+    """스레드 + 소속 메시지 전체 삭제 (§4). 없으면 404. 만료 스레드의 유일한 항목 삭제 경로."""
+    await _load_thread(user_id, thread_id, allow_expired=True)
     await _purge_thread(user_id, thread_id)
     return None
 
 
 async def list_messages(user_id: str, thread_id: str, limit: int, cursor: str | None) -> MessagePageData:
-    """메시지 목록 — 커서 없는 첫 호출은 최신 limit개, 커서로 과거 방향 (§4.5). payload 포함."""
-    await _load_thread(user_id, thread_id)
+    """메시지 목록 — 커서 없는 첫 호출은 최신 limit개, 커서로 과거 방향 (§4.5). payload 포함.
+
+    만료 스레드는 여기서 메시지를 지연 삭제하고 빈 페이지를 준다 — 스레드 항목은
+    남겨 클라가 needsDeletion 안내를 띄우고, 항목 삭제는 유저의 DELETE(§4)만 한다.
+    """
+    thread = await _load_thread(user_id, thread_id, allow_expired=True)
+    if thread.is_expired(clock.now_utc()):
+        await asyncio.to_thread(repository.delete_messages, thread_id)
+        return MessagePageData(items=[], next_cursor=None)
     items, next_cursor = await asyncio.to_thread(repository.messages_page, thread_id, limit, cursor)
     return MessagePageData(
         items=[MessageOut(**domain.to_message_view(item)) for item in items],
@@ -250,11 +267,20 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     return None
 
 
-async def _load_thread(user_id: str, thread_id: str) -> domain.ThreadRecord:
-    """스레드 조회 + 만료 판정. PK가 (user_id, thread_id)라 타 유저 접근은 여기서 404가 된다."""
+async def _load_thread(
+    user_id: str, thread_id: str, allow_expired: bool = False
+) -> domain.ThreadRecord:
+    """스레드 조회 — 없으면 404, 만료면 409 THREAD_EXPIRED(전송 차단).
+
+    만료 스레드는 목록에 보이는 실체라 404가 아닌 409로 구분한다. 조회·삭제처럼
+    만료 후에도 허용할 경로만 allow_expired로 통과시킨다.
+    PK가 (user_id, thread_id)라 타 유저 접근은 여기서 404가 된다.
+    """
     thread = await asyncio.to_thread(repository.get_thread, user_id, thread_id)
-    if thread is None or thread.is_expired(clock.now_utc()):
+    if thread is None:
         raise ThreadNotFoundError()
+    if not allow_expired and thread.is_expired(clock.now_utc()):
+        raise ThreadExpiredError()
     return thread
 
 

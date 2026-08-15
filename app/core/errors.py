@@ -58,6 +58,12 @@ class ThreadForbiddenError(DomainError):
     default_message = "접근할 수 없는 대화 스레드입니다."
 
 
+class ThreadExpiredError(DomainError):
+    status_code = 409
+    code = "THREAD_EXPIRED"
+    default_message = "보관 기한이 지난 대화입니다. 스레드를 삭제한 후 새로 시작해주세요."
+
+
 class ThreadQuotaExceededError(DomainError):
     status_code = 409
     code = "THREAD_QUOTA_EXCEEDED"

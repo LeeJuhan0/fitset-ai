@@ -17,14 +17,16 @@ Table chat_threads {
   summary_text text [note: 'LLM 생성 스레드 압축. 초기 null']
   summary_upto varchar [note: '요약에 반영된 마지막 메시지 message_id(ULID) — 다음 요약 배치 시작점']
   last_message_at datetime [note: 'ISO 8601 — 메시지 수신 시 갱신']
-  expires_at number [note: 'DynamoDB TTL 속성 — epoch 초, last_message_at + 14일. 메시지 수신 시 갱신 = 타이머 리셋']
+  expires_at number [note: '메시지 보존 기한 — epoch 초, last_message_at + 14일. 메시지 수신 시 갱신 = 타이머 리셋. 2026-08-15부터 DynamoDB TTL 등록 해제 — 항목 자동 삭제 없음']
 
   Note: '''
   대화 스레드 — DynamoDB 테이블 (온디맨드)
   - 스레드 목록: Query(user_id) → 최대 10개라 last_message_at 정렬은 서버 메모리에서 (GSI 불필요)
   - 유저당 최대 10개: 정원 도달 시 생성 거부 409 THREAD_QUOTA_EXCEEDED (2026-08-15 LRU 자동삭제 폐기, #40)
-  - 수명: 마지막 메시지 후 14일 미활동 시 TTL 자동 삭제
-    (TTL 삭제는 최대 며칠 지연 가능 → 조회 시 expires_at < now 항목은 만료로 간주해 숨김)
+  - 수명: 마지막 메시지 후 14일 미활동 시 만료 — 메시지만 삭제(조회 시 지연 삭제), 스레드 항목은
+    needsDeletion=true로 목록에 남겨 유저 삭제(DELETE §4)를 유도 (2026-08-15, #40 후속)
+    ⚠ 배포 시 chat_threads 테이블의 TTL(expires_at) 설정을 해제해야 한다 — 켜져 있으면
+    DynamoDB가 만료 항목을 지워버려 needsDeletion 흐름이 깨진다
   - 요약 갱신: summary_upto 이후 메시지가 n턴 쌓이면
     (기존 summary_text + 신규 메시지) → LLM 재요약, summary_upto 전진
     (응답 경로와 분리 — 백그라운드 처리)
@@ -62,7 +64,7 @@ Table chat_messages {
     시스템 프롬프트 = user_summaries + summary_text + 최근 N턴
   - payload는 앱 화면 렌더링 조회에서만 포함 (전체 필드 Query)
   - 삭제 경로 ①: 스레드 삭제 직후 Query(thread_id) → BatchWriteItem 25개 단위 삭제
-  - 삭제 경로 ②: TTL 만료는 스레드 항목만 삭제 → 고아 메시지는 일 1회 배치 정리
+  - 삭제 경로 ②: 만료 스레드 메시지는 조회(§4.5) 시 지연 삭제 → 접근 없는 스레드 몫은 일 1회 배치 정리
     (배치: 메시지 테이블 스캔으로 thread_id 수집 → chat_threads 부재분만 삭제, ①의 실패 안전망 겸용)
   '''
 }

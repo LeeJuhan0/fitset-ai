@@ -295,12 +295,63 @@ def test_thread_list_caps_at_quota_even_after_race(client, store):
 
 
 def test_create_over_race_overflow_rejects_without_deleting(client, store):
-    # 경쟁으로 초과된 상태에서 생성해도 지우지 않는다 — 409만 내고 초과분은 TTL이 정리
+    # 경쟁으로 초과된 상태에서 생성해도 지우지 않는다 — 409만 낸다
     for index in range(11):
         _seed_thread(store, f"01T{index}")
     response = client.post("/ai/v1/threads")
     assert response.status_code == 409
     assert len(store.threads) == 11
+
+
+def _seed_expired_thread(store, thread_id):
+    """보존 기한(14일)이 지난 스레드를 메시지 1건과 함께 심는다."""
+    store.put_thread(ThreadRecord(
+        user_id=USER_ID, thread_id=thread_id, title="옛 대화",
+        last_message_at="2026-07-01T00:00:00Z", expires_at=1,
+        created_at="2026-07-01T00:00:00Z",
+    ))
+    store.messages[thread_id] = [
+        {"thread_id": thread_id, "message_id": "M0001", "user_id": USER_ID,
+         "role": "user", "content": "옛날 얘기", "response_scheme": None, "payload": None,
+         "created_at": "2026-07-01T00:00:00Z"}
+    ]
+
+
+def test_expired_thread_listed_with_needs_deletion_flag(client, store):
+    # 만료 스레드는 숨기지 않는다 — 클라가 진입 시 삭제 안내를 띄울 수 있게 플래그로 노출
+    _seed_expired_thread(store, "01EXP")
+    fresh_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    flags = {
+        item["threadId"]: item["needsDeletion"]
+        for item in client.get("/ai/v1/threads").json()["data"]["items"]
+    }
+    assert flags == {"01EXP": True, fresh_id: False}
+
+
+def test_expired_thread_messages_are_purged_lazily(client, store):
+    # 만료 스레드 조회는 200 빈 목록 — 이 호출이 메시지 지연 삭제를 겸하고 항목은 남긴다
+    _seed_expired_thread(store, "01EXP")
+    body = client.get("/ai/v1/threads/01EXP/messages")
+    assert body.status_code == 200
+    assert body.json()["data"] == {"items": [], "nextCursor": None}
+    assert "01EXP" not in store.messages
+    assert (USER_ID, "01EXP") in store.threads
+
+
+def test_expired_thread_rejects_send_with_409(client, store, monkeypatch):
+    monkeypatch.setattr(graph, "run_turn_stream", _answer())
+    _seed_expired_thread(store, "01EXP")
+    response = client.post("/ai/v1/threads/01EXP/messages", json={"content": "안녕"})
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "THREAD_EXPIRED"
+
+
+def test_expired_thread_delete_removes_thread_item(client, store):
+    # 유저가 삭제를 확정하면 그때 스레드 항목까지 지운다 — 만료 스레드 항목의 유일한 삭제 경로
+    _seed_expired_thread(store, "01EXP")
+    assert client.delete("/ai/v1/threads/01EXP").status_code == 204
+    assert store.threads == {}
+    assert store.messages == {}
 
 
 def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, store):

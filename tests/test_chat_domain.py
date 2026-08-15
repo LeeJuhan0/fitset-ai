@@ -64,7 +64,7 @@ def test_is_expired_only_when_ttl_passed():
     assert _thread("a", None, None).is_expired(NOW) is False
 
 
-def test_active_threads_drops_expired_and_sorts_by_recent_activity():
+def test_sorted_by_activity_keeps_expired_and_sorts_by_recent_activity():
     past = int((NOW - timedelta(days=1)).timestamp())
     future = int((NOW + timedelta(days=1)).timestamp())
     threads = [
@@ -72,23 +72,22 @@ def test_active_threads_drops_expired_and_sorts_by_recent_activity():
         _thread("dead", "2026-07-28T00:00:00Z", past),
         _thread("fresh", "2026-07-28T00:00:00Z", future),
     ]
-    result = domain.active_threads(threads, NOW)
-    assert [thread.thread_id for thread in result] == ["fresh", "old"]
+    result = domain.sorted_by_activity(threads)
+    # 만료(dead)도 빠지지 않는다 — 목록에 needsDeletion으로 노출되고 항목 삭제는 유저 몫
+    assert [thread.thread_id for thread in result] == ["fresh", "dead", "old"]
 
 
-def test_active_threads_puts_empty_thread_last():
+def test_sorted_by_activity_puts_empty_thread_last():
     future = int((NOW + timedelta(days=1)).timestamp())
     threads = [_thread("empty", None, future), _thread("used", "2026-07-01T00:00:00Z", future)]
-    result = domain.active_threads(threads, NOW)
+    result = domain.sorted_by_activity(threads)
     assert [thread.thread_id for thread in result] == ["used", "empty"]
 
 
-def test_active_threads_breaks_activity_tie_by_thread_id():
+def test_sorted_by_activity_breaks_tie_by_thread_id():
     # 전부 미사용이면 last_message_at이 동률이라 thread_id(생성 시각 내장)로 갈라야 한다.
     # 안 그러면 목록 순서와 read-repair 잘림 대상이 입력 순서에 좌우된다.
-    result = domain.active_threads(
-        [_thread(f"01A{index}", None) for index in range(5)], NOW
-    )
+    result = domain.sorted_by_activity([_thread(f"01A{index}", None) for index in range(5)])
     assert [thread.thread_id for thread in result] == ["01A4", "01A3", "01A2", "01A1", "01A0"]
 
 

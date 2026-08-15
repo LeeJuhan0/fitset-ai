@@ -17,7 +17,7 @@
 | Method | Path | 설명 | 성공 |
 | --- | --- | --- | --- |
 | POST | `/ai/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
-| GET | `/ai/v1/threads` | 스레드 목록 (최대 10, 최근 활동순, 만료 제외) | 200 |
+| GET | `/ai/v1/threads` | 스레드 목록 (최대 10, 최근 활동순, 만료 스레드는 `needsDeletion` 플래그) | 200 |
 | POST | `/ai/v1/threads` | 스레드 생성 (정원 10개 도달 시 409 `THREAD_QUOTA_EXCEEDED`) | 201 |
 | DELETE | `/ai/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
 | GET | `/ai/v1/threads/{threadId}/messages` | 메시지 목록 — 최신 페이지부터 과거 방향 커서 (payload 포함, 2026-08-04) | 200 |
@@ -76,16 +76,17 @@
 ## 2. GET /ai/v1/threads
 
 ```json
-{ "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z" } ] }
+{ "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z", "needsDeletion": false } ] }
 ```
 
 - `title`: 첫 발화 기반 자동 생성, 첫 메시지 전이면 `null`. `lastMessageAt`: 빈 스레드면 `null`
+- `needsDeletion`: 메시지 보존 기한(마지막 활동 + 14일) 경과 여부 (2026-08-15). `true`면 메시지는 이미 삭제 대상이고 스레드 항목만 남은 상태 — 클라는 유저가 해당 대화방에 진입할 때 삭제 안내를 띄우고, 유저 확인 시 §4로 삭제한다. 서버는 스레드 항목을 자동 삭제하지 않는다
 
 ## 3. POST /ai/v1/threads
 
 본문 없음 → `201` `{ "threadId": "oid", "createdAt": "..." }`
 
-- 유저당 활성 스레드 최대 10개, 정원 도달 시 `409 THREAD_QUOTA_EXCEEDED` — 서버가 지워주지 않으므로 클라는 기존 스레드 삭제(§4)를 유도한다 (협의 포인트 ③ 확정, 2026-08-15: LRU 자동삭제 폐기)
+- 유저당 스레드 최대 10개, 정원 도달 시 `409 THREAD_QUOTA_EXCEEDED` — 서버가 지워주지 않으므로 클라는 기존 스레드 삭제(§4)를 유도한다 (협의 포인트 ③ 확정, 2026-08-15: LRU 자동삭제 폐기). 만료(`needsDeletion`) 스레드도 유저가 지우기 전까지 정원을 차지한다
 
 ## 4. DELETE /ai/v1/threads/{threadId}
 
@@ -105,8 +106,8 @@ Path Parameter:
 
 1. **소유권**: 대상은 JWT `sub`(userId)의 스레드로 한정. 클라는 userId를 보내지 않는다(§공통) — 서버가 `chat_threads` PK `(user_id, thread_id)`로 직접 조회
 2. **삭제 범위·순서**: `chat_threads` 항목 삭제 → `chat_messages` Query(threadId) → BatchWriteItem 25개 단위 삭제 (document-structure 삭제 경로 ①). 메시지 삭제가 부분 실패해도 **스레드 항목이 지워졌으면 204** — 남은 고아 메시지는 일 1회 배치가 정리(삭제 경로 ②)하므로 클라 재시도 불필요
-3. **만료 스레드**: `expires_at < now`(TTL 지연으로 항목이 남아있는 경우)는 조회 단계에서 부재로 간주 → `404 THREAD_NOT_FOUND`
-4. **유일한 삭제 경로**: TTL 만료 외에 서버가 스레드를 지우는 경로는 이 API뿐이다 (2026-08-15 LRU 자동 삭제 폐기 — §3은 정원 도달 시 409만 반환)
+3. **만료 스레드도 삭제 가능**: `needsDeletion` 스레드의 항목 삭제는 이 API가 유일한 경로다 — 클라는 삭제 안내에서 유저 확인 후 여기를 호출한다 (2026-08-15, 구 404 처리 폐기)
+4. **유일한 삭제 경로**: 서버가 스레드 항목을 지우는 경로는 이 API뿐이다 (2026-08-15 LRU 자동 삭제·TTL 항목 삭제 폐기 — §3은 정원 도달 시 409만 반환)
 
 오류:
 
@@ -114,7 +115,7 @@ Path Parameter:
 | --- | --- | --- |
 | 401 | `UNAUTHORIZED` | JWT 없음·서명 검증 실패·만료·`type != access` |
 | 403 | `THREAD_FORBIDDEN` | 타 유저 스레드 접근 — **현 스키마에선 도달 불가**, 아래 주석 참조 |
-| 404 | `THREAD_NOT_FOUND` | 스레드 없음 · 이미 삭제됨 · TTL 만료 |
+| 404 | `THREAD_NOT_FOUND` | 스레드 없음 · 이미 삭제됨 |
 
 - `403`은 `chat_threads` PK가 `(user_id, thread_id)` 복합키라 **남의 스레드 조회 결과가 "부재"와 구분되지 않는다** — 타 유저 threadId를 넣어도 GetItem이 비어 404가 된다. 존재 여부 노출 방지 측면에선 404가 오히려 안전하므로, 403은 계약상 예약만 하고 실제로는 내보내지 않는다 (§9 협의 포인트 ⑨)
 - 재시도 시 두 번째 호출이 404가 되는 점(비멱등)도 §9 협의 포인트 ⑨
@@ -136,7 +137,7 @@ Path Parameter:
 - 페이징 방향은 과거로 — 위로 스크롤 시 `nextCursor`로 이전 페이지 요청, `null`이면 대화의 처음까지 읽은 것
 - 페이지 안의 `items`는 시간 오름차순 — 클라는 기존 목록 위에 그대로 끼워 넣는다
 - user 메시지는 `responseScheme`·`payload` 모두 `null`
-- 오류: 400 (limit 범위·빈 cursor) / 401 / 403 / 404 (스레드 없음·만료)
+- 오류: 400 (limit 범위·빈 cursor) / 401 / 403 / 404 (스레드 없음). 만료(`needsDeletion`) 스레드는 오류가 아니라 **200 빈 목록** — 이 호출이 만료 메시지의 지연 삭제를 겸한다 (2026-08-15)
 
 ## 6. POST /ai/v1/threads/{threadId}/messages (SSE, 2026-08-04 전환)
 
@@ -157,7 +158,7 @@ data: {"message":{"messageId":"oid","role":"assistant","content":"...","response
 - `delta`는 본문 증분 — 이어 붙이면 본문이지만 **done이 정본**(클라는 done 수신 시 교체). `payload`는 done에만
 - `threadTitle`은 제목 생성·변경 시에만 값, 이외 null — 목록 화면 갱신용
 - 무토큰 구간(툴 실행)엔 15초 이내 간격 하트비트 코멘트(`:ping`) — 클라는 무시
-- 오류: 스트림 시작 전(400 길이 / 401 / 403 / 404 / 409 `THREAD_FULL`(기본 1000, 2026-08-04 상향) / 429 / 503)은 기존 HTTP JSON. **시작 후 실패만 `error` 이벤트**(`{"traceId", "error"{...}}`) 후 스트림 종료 — 실패 턴도 user 메시지는 저장돼 있을 수 있다(멱등성 협의 ⑧)
+- 오류: 스트림 시작 전(400 길이 / 401 / 403 / 404 / 409 `THREAD_FULL`(기본 1000, 2026-08-04 상향) / 409 `THREAD_EXPIRED`(만료 스레드 전송 차단, 2026-08-15) / 429 / 503)은 기존 HTTP JSON. **시작 후 실패만 `error` 이벤트**(`{"traceId", "error"{...}}`) 후 스트림 종료 — 실패 턴도 user 메시지는 저장돼 있을 수 있다(멱등성 협의 ⑧)
 - 타임아웃 기준: 첫 이벤트 30s, 이벤트 간 무수신 30s
 
 ## 6-B. GET /ai/v1/exercises/{slug}/video
@@ -258,7 +259,8 @@ chart payload:
 
 | code | HTTP | 상황 |
 | --- | --- | --- |
-| `THREAD_NOT_FOUND` | 404 | 스레드 없음, TTL 만료 |
+| `THREAD_NOT_FOUND` | 404 | 스레드 없음, 이미 삭제됨 |
+| `THREAD_EXPIRED` | 409 | 보존 기한 경과(`needsDeletion`) 스레드에 메시지 전송 시도 — 클라는 삭제 안내 (2026-08-15) |
 | `THREAD_FORBIDDEN` | 403 | 타 유저 스레드 접근 |
 | `NO_ROUTINE_CANDIDATE` | 409 | 조건 만족 루틴 구성 불가 |
 | `AI_UNAVAILABLE` | 503 | LLM 호출 실패 — 클라는 재시도 UI |

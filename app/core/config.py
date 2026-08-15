@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     chat_messages_table: str = "chat_messages"
     user_summaries_table: str = "user_summaries"
     max_threads_per_user: int = 10    # 도달 시 409 THREAD_QUOTA_EXCEEDED — 자동삭제(LRU) 폐기 (2026-08-15, #40)
-    thread_ttl_days: int = 14         # 마지막 메시지 후 미활동 만료 — expires_at(TTL 속성)
+    thread_ttl_days: int = 14         # 메시지 보존 기한 — 경과 시 메시지만 삭제, 스레드는 needsDeletion으로 유저 삭제 유도
     chat_context_turns: int = 6       # LLM 컨텍스트로 싣는 최근 메시지 수 (payload 제외 조회).
                                       # 12→6 축소(2026-07-29 토큰 다이어트) — 6턴 밖 문맥은 스레드 요약(summary_text)이 담당
     chat_title_max_length: int = 30   # 제목 생성 LLM 실패 시 첫 발화 앞 N자

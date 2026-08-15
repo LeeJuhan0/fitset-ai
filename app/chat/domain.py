@@ -71,7 +71,7 @@ def new_ulid(moment: datetime | None = None) -> str:
 
 
 def ttl_epoch(last_message_at: datetime, days: int) -> int:
-    """TTL 속성값 — 마지막 활동 + N일의 epoch 초. 메시지 수신마다 갱신해 타이머를 리셋한다."""
+    """메시지 보존 기한 — 마지막 활동 + N일의 epoch 초. 메시지 수신마다 갱신해 타이머를 리셋한다."""
     return int((last_message_at + timedelta(days=days)).timestamp())
 
 
@@ -93,7 +93,7 @@ class ThreadRecord(BaseModel):
 
     @classmethod
     def open(cls, user_id: str, now: datetime, ttl_days: int) -> "ThreadRecord":
-        """새 스레드 조립 — 빈 스레드도 방치되면 지워지도록 생성 시각 기준 TTL을 건다."""
+        """새 스레드 조립 — 빈 스레드도 방치되면 만료되도록 생성 시각 기준 보존 기한을 건다."""
         return cls(
             user_id=user_id,
             thread_id=new_ulid(now),
@@ -115,7 +115,11 @@ class ThreadRecord(BaseModel):
         return self.model_dump(exclude_none=True)
 
     def is_expired(self, now: datetime) -> bool:
-        """만료 판정 — DynamoDB TTL 삭제는 며칠 지연될 수 있어 조회 단계에서 숨긴다."""
+        """만료 판정 — 메시지 보존 기한(마지막 활동 + 14일) 경과.
+
+        만료돼도 스레드 항목은 지우지 않는다 — 목록에 needsDeletion으로 알리고
+        메시지만 지연 삭제하며, 항목 삭제는 유저의 DELETE 요청(§4)만 한다.
+        """
         if self.expires_at is None:
             return False
         return self.expires_at <= int(now.timestamp())
@@ -131,10 +135,9 @@ def _activity_key(thread: ThreadRecord) -> tuple[str, str]:
     return thread.last_message_at or "", thread.thread_id
 
 
-def active_threads(threads: list[ThreadRecord], now: datetime) -> list[ThreadRecord]:
-    """만료 제외 + 최근 활동순 정렬 — 목록 응답과 정원 판정이 같은 순서를 공유한다."""
-    alive = [thread for thread in threads if not thread.is_expired(now)]
-    return sorted(alive, key=_activity_key, reverse=True)
+def sorted_by_activity(threads: list[ThreadRecord]) -> list[ThreadRecord]:
+    """최근 활동순 정렬 — 만료 스레드도 유저가 지울 때까지 목록·정원에 남는다(§2)."""
+    return sorted(threads, key=_activity_key, reverse=True)
 
 
 def fallback_title(content: str, max_length: int) -> str:
