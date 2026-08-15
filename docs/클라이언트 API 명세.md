@@ -8,7 +8,7 @@
 - Base URL: `https://api.fitset.kro.kr/ai/v1` (예: `https://api.fitset.kro.kr/ai/v1/threads`) — 단일 호스트 `api.fitset.kro.kr`에서 ALB 리스너 규칙이 Host 헤더 `api.fitset.kro.kr` + 경로 `/ai/*`를 AI 서버 대상 그룹으로 라우팅하고, 코드가 `/ai/v1` 프리픽스로 버저닝한다 (2026-08-02 전환, 기존 호스트 분리안 폐기). 나머지 경로는 백엔드로 간다. 호출 주체는 앱 클라이언트
 - 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 JWKS 공개키(RS256, kid 매칭)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-08-04 JWKS 전환). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
-- 목록 응답은 `data.items`, `page` 객체 없음. 스레드 목록은 최대 5개 전체 반환, **메시지 목록만 커서 페이지네이션**(`cursor`·`limit`·`nextCursor`, 2026-08-04) — 커서는 불투명 문자열, 클라는 이전 응답의 `nextCursor`를 그대로 되돌려준다
+- 목록 응답은 `data.items`, `page` 객체 없음. 스레드 목록은 최대 10개 전체 반환, **메시지 목록만 커서 페이지네이션**(`cursor`·`limit`·`nextCursor`, 2026-08-04) — 커서는 불투명 문자열, 클라는 이전 응답의 `nextCursor`를 그대로 되돌려준다
 - LLM 포함 API(루틴 생성, 채팅)는 클라 타임아웃 30s 권장
 - 와이어는 camelCase (`responseScheme`, `exerciseGif`) — 내부 DB는 snake_case, 표현 계층에서 변환
 
@@ -17,8 +17,8 @@
 | Method | Path | 설명 | 성공 |
 | --- | --- | --- | --- |
 | POST | `/ai/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
-| GET | `/ai/v1/threads` | 스레드 목록 (최대 5, 최근 활동순, 만료 제외) | 200 |
-| POST | `/ai/v1/threads` | 스레드 생성 (5개 초과 시 최구 활동 스레드 삭제 후 생성) | 201 |
+| GET | `/ai/v1/threads` | 스레드 목록 (최대 10, 최근 활동순, 만료 제외) | 200 |
+| POST | `/ai/v1/threads` | 스레드 생성 (정원 10개 도달 시 409 `THREAD_QUOTA_EXCEEDED`) | 201 |
 | DELETE | `/ai/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
 | GET | `/ai/v1/threads/{threadId}/messages` | 메시지 목록 — 최신 페이지부터 과거 방향 커서 (payload 포함, 2026-08-04) | 200 |
 | POST | `/ai/v1/threads/{threadId}/messages` | 메시지 전송 → 챗봇 응답 (MVP 동기 JSON 1회) | 200 |
@@ -85,7 +85,7 @@
 
 본문 없음 → `201` `{ "threadId": "oid", "createdAt": "..." }`
 
-- 유저당 활성 스레드 최대 5개, 초과 시 마지막 활동이 가장 오래된 스레드 삭제 후 생성 (협의 포인트 ③: 409 반환 대안 논의 중)
+- 유저당 활성 스레드 최대 10개, 정원 도달 시 `409 THREAD_QUOTA_EXCEEDED` — 서버가 지워주지 않으므로 클라는 기존 스레드 삭제(§4)를 유도한다 (협의 포인트 ③ 확정, 2026-08-15: LRU 자동삭제 폐기)
 
 ## 4. DELETE /ai/v1/threads/{threadId}
 
@@ -106,7 +106,7 @@ Path Parameter:
 1. **소유권**: 대상은 JWT `sub`(userId)의 스레드로 한정. 클라는 userId를 보내지 않는다(§공통) — 서버가 `chat_threads` PK `(user_id, thread_id)`로 직접 조회
 2. **삭제 범위·순서**: `chat_threads` 항목 삭제 → `chat_messages` Query(threadId) → BatchWriteItem 25개 단위 삭제 (document-structure 삭제 경로 ①). 메시지 삭제가 부분 실패해도 **스레드 항목이 지워졌으면 204** — 남은 고아 메시지는 일 1회 배치가 정리(삭제 경로 ②)하므로 클라 재시도 불필요
 3. **만료 스레드**: `expires_at < now`(TTL 지연으로 항목이 남아있는 경우)는 조회 단계에서 부재로 간주 → `404 THREAD_NOT_FOUND`
-4. **자동 삭제와 무관**: 스레드 5개 초과 시 LRU 자동 삭제(§3)는 서버 내부 처리이며 이 API를 거치지 않는다
+4. **유일한 삭제 경로**: TTL 만료 외에 서버가 스레드를 지우는 경로는 이 API뿐이다 (2026-08-15 LRU 자동 삭제 폐기 — §3은 정원 도달 시 409만 반환)
 
 오류:
 
@@ -264,6 +264,7 @@ chart payload:
 | `AI_UNAVAILABLE` | 503 | LLM 호출 실패 — 클라는 재시도 UI |
 | `RATE_LIMITED` | 429 | 요청 빈도 초과 — 메시지 전송·루틴 생성에 유저별 분당 상한 적용 (2026-07-29 구현) |
 | `THREAD_FULL` | 409 | 스레드당 메시지 상한(서버 설정, 기본 100) 도달 — 클라는 새 스레드 생성 유도 |
+| `THREAD_QUOTA_EXCEEDED` | 409 | 유저당 스레드 정원(서버 설정, 기본 10) 도달 — 클라는 기존 스레드 삭제(§4) 유도 (2026-08-15) |
 | `EXERCISE_NOT_FOUND` | 404 | 존재하지 않는 종목 slug (§6-B) |
 | `VIDEO_NOT_FOUND` | 404 | 종목은 있으나 가이드 영상 미등록 (§6-B) |
 
@@ -271,7 +272,7 @@ chart payload:
 
 1. ~~Gateway 라우팅 prefix `/ai` — 버저닝(`/ai/v1`) 여부~~ → 확정(2026-08-02): 단일 호스트 + ALB 경로 라우팅 — `api.fitset.kro.kr`의 `/ai/*`가 AI 서버, 코드 프리픽스는 `/ai/v1`. 2026-07-25의 호스트 분리안(`ai.example.com`)은 폐기
 2. 스트리밍 — MVP 동기 JSON, SSE 도입 시점·게이트웨이 SSE 통과 설정
-3. 스레드 5개 초과 — 자동 삭제(+`deletedThreadId` 반환) vs 409 후 유저 직접 삭제
+3. ~~스레드 5개 초과 — 자동 삭제(+`deletedThreadId` 반환) vs 409 후 유저 직접 삭제~~ → 확정(2026-08-15): 정원 10개 상향 + 도달 시 `409 THREAD_QUOTA_EXCEEDED`, 자동 삭제 폐기 (#40)
 4. 레이트리밋 — 메시지 분당·루틴 생성 일일 상한, Gateway 적용 여부
 5. `responseScheme` 표기 — 와이어 camelCase(`exerciseGif`), 내부 DB snake(`exercise_gif`)
 6. `context` 자유 텍스트 — 프롬프트 인젝션 대비 (길이 제한 + 시스템 프롬프트 격리)

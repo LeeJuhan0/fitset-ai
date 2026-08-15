@@ -1,6 +1,6 @@
 """채팅 도메인 라우터. HTTP 입출력만 담당한다.
 
-목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 5개 전체 반환(ItemsData),
+목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 10개 전체 반환(ItemsData),
 메시지 목록만 커서 페이지네이션(MessagePageData — cursor·limit·nextCursor, §4.5).
 메시지 전송은 SSE 스트리밍(§4.6) — 이벤트의 프레임 직렬화(delta·done·error)는
 전송 형식이므로 여기(HTTP 계층)가 맡고, 하트비트 삽입은 core/sse, service는 의미 이벤트만 낸다.
@@ -47,7 +47,7 @@ async def create_thread(
     user_id: str = Depends(deps.get_current_user_id),
     trace_id: str = Depends(deps.get_trace_id),
 ) -> ApiResponse[ThreadCreated]:
-    """스레드를 생성한다. 정원 초과 시 서버가 가장 오래 미활동한 스레드를 정리한다."""
+    """스레드를 생성한다. 정원(10개) 도달 시 409 THREAD_QUOTA_EXCEEDED로 거부한다."""
     thread = await service.create_thread(user_id)
     return ApiResponse(trace_id=trace_id, data=thread)
 

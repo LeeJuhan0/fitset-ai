@@ -1,6 +1,6 @@
 """채팅 도메인 순수 로직 — I/O 없는 함수·상수·레코드만.
 
-ULID 생성, TTL 계산, 스레드 레코드(만료 판정 포함), 정원 초과 선별, 요약 시점 판정을 모은다.
+ULID 생성, TTL 계산, 스레드 레코드(만료 판정 포함), 요약 시점 판정을 모은다.
 계산만 하고 읽기·쓰기는 repository가 담당한다 (계층 규칙).
 """
 import os
@@ -125,8 +125,8 @@ def _activity_key(thread: ThreadRecord) -> tuple[str, str]:
     """정렬 키 — 마지막 활동, 동률이면 thread_id(ULID에 생성 시각 내장).
 
     한 번도 안 쓴 스레드는 last_message_at이 전부 null이라 키가 동률이 된다. 이때
-    thread_id로 갈라주지 않으면 정렬이 입력 순서에 좌우돼 **가장 오래된 스레드 대신
-    가장 최근 것이 LRU 삭제 대상이 된다**.
+    thread_id로 갈라주지 않으면 정렬이 입력 순서에 좌우돼 **목록 순서와 read-repair
+    잘림 대상이 요청마다 달라진다**.
     """
     return thread.last_message_at or "", thread.thread_id
 
@@ -135,13 +135,6 @@ def active_threads(threads: list[ThreadRecord], now: datetime) -> list[ThreadRec
     """만료 제외 + 최근 활동순 정렬 — 목록 응답과 정원 판정이 같은 순서를 공유한다."""
     alive = [thread for thread in threads if not thread.is_expired(now)]
     return sorted(alive, key=_activity_key, reverse=True)
-
-
-def overflow_threads(active: list[ThreadRecord], limit: int) -> list[ThreadRecord]:
-    """새 스레드 자리를 만들기 위해 지울 스레드 — 활동순 뒤쪽(가장 오래 미활동)부터."""
-    if len(active) < limit:
-        return []
-    return active[limit - 1:]
 
 
 def fallback_title(content: str, max_length: int) -> str:

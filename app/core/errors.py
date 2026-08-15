@@ -58,6 +58,12 @@ class ThreadForbiddenError(DomainError):
     default_message = "접근할 수 없는 대화 스레드입니다."
 
 
+class ThreadQuotaExceededError(DomainError):
+    status_code = 409
+    code = "THREAD_QUOTA_EXCEEDED"
+    default_message = "대화 스레드가 최대 개수에 도달했습니다. 기존 스레드를 삭제한 후 다시 시도해주세요."
+
+
 class RateLimitedError(DomainError):
     status_code = 429
     code = "RATE_LIMITED"

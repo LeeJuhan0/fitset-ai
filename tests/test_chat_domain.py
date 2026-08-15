@@ -1,4 +1,4 @@
-"""채팅 도메인 순수 로직 테스트 — ULID·TTL·레코드·정원·요약 판정."""
+"""채팅 도메인 순수 로직 테스트 — ULID·TTL·레코드·정렬·요약 판정."""
 from datetime import datetime, timedelta, timezone
 
 from app.chat import domain
@@ -83,23 +83,13 @@ def test_active_threads_puts_empty_thread_last():
     assert [thread.thread_id for thread in result] == ["used", "empty"]
 
 
-def test_overflow_threads_evicts_only_when_at_quota():
-    active = [_thread(str(i), f"2026-07-{20 + i:02d}T00:00:00Z") for i in range(5)]
-    active = domain.active_threads(active, NOW)
-    assert domain.overflow_threads(active[:4], 5) == []
-    # 정원이 찬 상태에서 1개를 만들려면 가장 오래 미활동한 1개를 비운다
-    evicted = domain.overflow_threads(active, 5)
-    assert [thread.thread_id for thread in evicted] == ["0"]
-
-
-def test_overflow_evicts_oldest_when_no_thread_has_activity():
+def test_active_threads_breaks_activity_tie_by_thread_id():
     # 전부 미사용이면 last_message_at이 동률이라 thread_id(생성 시각 내장)로 갈라야 한다.
-    # 안 그러면 가장 오래된 것 대신 가장 최근에 만든 스레드가 지워진다.
-    active = domain.active_threads(
+    # 안 그러면 목록 순서와 read-repair 잘림 대상이 입력 순서에 좌우된다.
+    result = domain.active_threads(
         [_thread(f"01A{index}", None) for index in range(5)], NOW
     )
-    evicted = domain.overflow_threads(active, 5)
-    assert [thread.thread_id for thread in evicted] == ["01A0"]
+    assert [thread.thread_id for thread in result] == ["01A4", "01A3", "01A2", "01A1", "01A0"]
 
 
 def test_fallback_title_truncates_and_collapses_whitespace():

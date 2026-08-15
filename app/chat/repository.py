@@ -35,7 +35,7 @@ def _names(fields) -> dict:
 
 
 def list_threads(user_id: str) -> list[ThreadRecord]:
-    """유저의 전체 스레드 — 최대 5개라 정렬·만료 필터는 메모리에서 한다(GSI 불필요)."""
+    """유저의 전체 스레드 — 최대 10개라 정렬·만료 필터는 메모리에서 한다(GSI 불필요)."""
     response = get_chat_threads_table().query(
         KeyConditionExpression=Key("user_id").eq(user_id)
     )

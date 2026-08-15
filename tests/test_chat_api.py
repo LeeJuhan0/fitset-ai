@@ -166,12 +166,14 @@ def test_thread_list_has_no_page_object(client):
     assert body["data"]["items"][0]["lastMessageAt"] is None
 
 
-def test_thread_quota_evicts_least_recently_active(client, store):
-    created = [client.post("/ai/v1/threads").json()["data"]["threadId"] for _ in range(6)]
+def test_thread_quota_rejects_creation_with_409(client, store):
+    created = [client.post("/ai/v1/threads").json()["data"]["threadId"] for _ in range(10)]
+    response = client.post("/ai/v1/threads")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "THREAD_QUOTA_EXCEEDED"
+    # 자동삭제가 없다 — 기존 10개는 전부 그대로 남는다
     remaining = {item["threadId"] for item in client.get("/ai/v1/threads").json()["data"]["items"]}
-    assert len(remaining) == 5
-    # 가장 먼저 만들어 활동이 없는 스레드가 밀려난다
-    assert created[0] not in remaining
+    assert remaining == set(created)
 
 
 def test_send_message_persists_pair_and_returns_title(client, monkeypatch, store):
@@ -285,19 +287,20 @@ def _seed_thread(store, thread_id):
 
 
 def test_thread_list_caps_at_quota_even_after_race(client, store):
-    # F2 read-repair ① — TOCTOU 경쟁으로 6개 이상 생겨도 목록은 계약(최대 5)을 지킨다
-    for index in range(7):
+    # F2 read-repair — TOCTOU 경쟁으로 11개 이상 생겨도 목록은 계약(최대 10)을 지킨다
+    for index in range(12):
         _seed_thread(store, f"01T{index}")
     items = client.get("/ai/v1/threads").json()["data"]["items"]
-    assert len(items) == 5
+    assert len(items) == 10
 
 
-def test_create_thread_repairs_overflow_from_race(client, store):
-    # F2 read-repair ② — 초과 상태에서 생성하면 정원까지 되돌린다 (LRU 일괄 정리)
-    for index in range(6):
+def test_create_over_race_overflow_rejects_without_deleting(client, store):
+    # 경쟁으로 초과된 상태에서 생성해도 지우지 않는다 — 409만 내고 초과분은 TTL이 정리
+    for index in range(11):
         _seed_thread(store, f"01T{index}")
-    client.post("/ai/v1/threads")
-    assert len(store.threads) == 5
+    response = client.post("/ai/v1/threads")
+    assert response.status_code == 409
+    assert len(store.threads) == 11
 
 
 def test_refresh_below_threshold_skips_full_partition_read(client, monkeypatch, store):

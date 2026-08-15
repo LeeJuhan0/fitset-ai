@@ -21,8 +21,8 @@ Table chat_threads {
 
   Note: '''
   대화 스레드 — DynamoDB 테이블 (온디맨드)
-  - 스레드 목록: Query(user_id) → 최대 5개라 last_message_at 정렬은 서버 메모리에서 (GSI 불필요)
-  - 유저당 최대 5개: 6번째 생성 시 last_message_at 최소(가장 오래 미활동) 스레드 삭제 (LRU)
+  - 스레드 목록: Query(user_id) → 최대 10개라 last_message_at 정렬은 서버 메모리에서 (GSI 불필요)
+  - 유저당 최대 10개: 정원 도달 시 생성 거부 409 THREAD_QUOTA_EXCEEDED (2026-08-15 LRU 자동삭제 폐기, #40)
   - 수명: 마지막 메시지 후 14일 미활동 시 TTL 자동 삭제
     (TTL 삭제는 최대 며칠 지연 가능 → 조회 시 expires_at < now 항목은 만료로 간주해 숨김)
   - 요약 갱신: summary_upto 이후 메시지가 n턴 쌓이면

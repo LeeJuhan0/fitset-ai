@@ -28,16 +28,17 @@ from app.core.errors import (
     RateLimitedError,
     ThreadFullError,
     ThreadNotFoundError,
+    ThreadQuotaExceededError,
 )
 
 logger = logging.getLogger("fitset")
 
 
 async def list_threads(user_id: str) -> list[ThreadOut]:
-    """스레드 목록 — 최대 5개, 최근 활동순, 만료 제외 (§2).
+    """스레드 목록 — 최대 10개, 최근 활동순, 만료 제외 (§2).
 
     정원까지 잘라서 반환한다(read-repair) — 동시 생성 TOCTOU 경쟁으로 저장소에
-    6개가 생겨도 계약(최대 5)을 지키고, 초과분은 다음 생성 때 LRU로 정리된다.
+    11개가 생겨도 계약(최대 10)을 지키고, 초과분은 TTL 만료로 소멸한다.
     """
     settings = get_settings()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
@@ -46,15 +47,13 @@ async def list_threads(user_id: str) -> list[ThreadOut]:
 
 
 async def create_thread(user_id: str) -> ThreadCreated:
-    """스레드 생성 — 정원(5개) 초과 시 가장 오래 미활동한 스레드를 지우고 만든다 (§3)."""
+    """스레드 생성 — 정원(10개) 도달 시 409로 거부, 삭제는 유저 몫이다 (§3)."""
     settings = get_settings()
     now = clock.now_utc()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
     active = domain.active_threads(threads, now)
-
-    for victim in domain.overflow_threads(active, settings.max_threads_per_user):
-        logger.info("thread quota exceeded, evicting %s", victim.thread_id)
-        await _purge_thread(user_id, victim.thread_id)
+    if len(active) >= settings.max_threads_per_user:
+        raise ThreadQuotaExceededError()
 
     record = domain.ThreadRecord.open(user_id, now, settings.thread_ttl_days)
     await asyncio.to_thread(repository.put_thread, record)
