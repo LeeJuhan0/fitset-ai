@@ -161,9 +161,17 @@ def test_thread_list_has_no_page_object(client):
     client.post("/ai/v1/threads")
     body = client.get("/ai/v1/threads").json()
     # 클라이언트 API 명세 §공통 — 커서를 안 쓰므로 page를 내보내지 않는다
-    assert set(body["data"]) == {"items"}
+    assert set(body["data"]) == {"items", "canCreateThread"}
     assert body["data"]["items"][0]["title"] is None
     assert body["data"]["items"][0]["lastMessageAt"] is None
+
+
+def test_thread_list_reports_can_create_thread(client, store):
+    # 생성(§3)과 같은 정원 판정 — 정원이 차면 클라가 목록 화면에서 생성 버튼을 잠근다
+    assert client.get("/ai/v1/threads").json()["data"]["canCreateThread"] is True
+    for _ in range(10):
+        client.post("/ai/v1/threads")
+    assert client.get("/ai/v1/threads").json()["data"]["canCreateThread"] is False
 
 
 def test_thread_quota_rejects_creation_with_409(client, store):

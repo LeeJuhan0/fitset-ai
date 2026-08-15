@@ -18,6 +18,7 @@ from app.chat.schemas import (
     MessagePageData,
     MessageSendData,
     ThreadCreated,
+    ThreadListData,
     ThreadOut,
 )
 from app.core import clock, llm, ratelimit
@@ -35,26 +36,31 @@ from app.core.errors import (
 logger = logging.getLogger("fitset")
 
 
-async def list_threads(user_id: str) -> list[ThreadOut]:
+async def list_threads(user_id: str) -> ThreadListData:
     """스레드 목록 — 최대 10개, 최근 활동순 (§2).
 
     만료 스레드도 숨기지 않고 needsDeletion을 켜서 내보낸다 — 항목 삭제는 유저 몫이다(§4).
     정원까지 잘라서 반환한다(read-repair) — 동시 생성 TOCTOU 경쟁으로 저장소에
     11개가 생겨도 계약(최대 10)을 지킨다.
+    canCreateThread는 생성(§3)의 정원 판정과 같은 기준(잘리기 전 전체 수)으로 계산한다
+    — 목록과 어긋나면 버튼은 열렸는데 생성은 409가 나는 화면이 된다.
     """
     settings = get_settings()
     now = clock.now_utc()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
     visible = domain.sorted_by_activity(threads)[: settings.max_threads_per_user]
-    return [
-        ThreadOut(
-            thread_id=thread.thread_id,
-            title=thread.title,
-            last_message_at=thread.last_message_at,
-            needs_deletion=thread.is_expired(now),
-        )
-        for thread in visible
-    ]
+    return ThreadListData(
+        items=[
+            ThreadOut(
+                thread_id=thread.thread_id,
+                title=thread.title,
+                last_message_at=thread.last_message_at,
+                needs_deletion=thread.is_expired(now),
+            )
+            for thread in visible
+        ],
+        can_create_thread=len(threads) < settings.max_threads_per_user,
+    )
 
 
 async def create_thread(user_id: str) -> ThreadCreated:

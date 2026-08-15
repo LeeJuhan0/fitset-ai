@@ -8,7 +8,7 @@
 - Base URL: `https://api.fitset.kro.kr/ai/v1` (예: `https://api.fitset.kro.kr/ai/v1/threads`) — 단일 호스트 `api.fitset.kro.kr`에서 ALB 리스너 규칙이 Host 헤더 `api.fitset.kro.kr` + 경로 `/ai/*`를 AI 서버 대상 그룹으로 라우팅하고, 코드가 `/ai/v1` 프리픽스로 버저닝한다 (2026-08-02 전환, 기존 호스트 분리안 폐기). 나머지 경로는 백엔드로 간다. 호출 주체는 앱 클라이언트
 - 인증: `Authorization: Bearer {accessToken}` — **API Gateway 미사용, ELB는 TLS 종료만** 담당하고 각 수신 서버가 JWKS 공개키(RS256, kid 매칭)로 JWT를 직접 검증해 `sub`를 userId로 사용 (비즈니스 규칙 §9, 2026-08-04 JWKS 전환). 클라가 userId를 보내는 API는 없음 (사칭 방지)
 - 응답: 팀 규약 `{traceId, data}` / `{traceId, error{code, message, details}}`
-- 목록 응답은 `data.items`, `page` 객체 없음. 스레드 목록은 최대 10개 전체 반환, **메시지 목록만 커서 페이지네이션**(`cursor`·`limit`·`nextCursor`, 2026-08-04) — 커서는 불투명 문자열, 클라는 이전 응답의 `nextCursor`를 그대로 되돌려준다
+- 목록 응답은 `data.items`, `page` 객체 없음. 스레드 목록은 최대 10개 전체 반환(+`canCreateThread`, §2), **메시지 목록만 커서 페이지네이션**(`cursor`·`limit`·`nextCursor`, 2026-08-04) — 커서는 불투명 문자열, 클라는 이전 응답의 `nextCursor`를 그대로 되돌려준다
 - LLM 포함 API(루틴 생성, 채팅)는 클라 타임아웃 30s 권장
 - 와이어는 camelCase (`responseScheme`, `exerciseGif`) — 내부 DB는 snake_case, 표현 계층에서 변환
 
@@ -17,7 +17,7 @@
 | Method | Path | 설명 | 성공 |
 | --- | --- | --- | --- |
 | POST | `/ai/v1/routines` | AI 루틴 생성 (홈 고정 워크로드) | 200 |
-| GET | `/ai/v1/threads` | 스레드 목록 (최대 10, 최근 활동순, 만료 스레드는 `needsDeletion` 플래그) | 200 |
+| GET | `/ai/v1/threads` | 스레드 목록 (최대 10, 최근 활동순, 만료 스레드는 `needsDeletion` 플래그, 생성 가능 여부 `canCreateThread`) | 200 |
 | POST | `/ai/v1/threads` | 스레드 생성 (정원 10개 도달 시 409 `THREAD_QUOTA_EXCEEDED`) | 201 |
 | DELETE | `/ai/v1/threads/{threadId}` | 스레드+소속 메시지 전체 삭제, 복구 불가 | 204 |
 | GET | `/ai/v1/threads/{threadId}/messages` | 메시지 목록 — 최신 페이지부터 과거 방향 커서 (payload 포함, 2026-08-04) | 200 |
@@ -76,10 +76,11 @@
 ## 2. GET /ai/v1/threads
 
 ```json
-{ "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z", "needsDeletion": false } ] }
+{ "items": [ { "threadId": "oid", "title": "어깨 재활 루틴 상담", "lastMessageAt": "2026-07-23T09:12:00Z", "needsDeletion": false } ], "canCreateThread": true }
 ```
 
 - `title`: 첫 발화 기반 자동 생성, 첫 메시지 전이면 `null`. `lastMessageAt`: 빈 스레드면 `null`
+- `canCreateThread`: 스레드 추가 생성 가능 여부 (2026-08-15) — §3 생성의 정원 판정과 같은 기준. `false`면 클라는 생성 버튼을 잠그고 기존 스레드 삭제를 유도한다 (§3을 호출하면 `409 THREAD_QUOTA_EXCEEDED`)
 - `needsDeletion`: 메시지 보존 기한(마지막 활동 + 14일) 경과 여부 (2026-08-15). `true`면 메시지는 이미 삭제 대상이고 스레드 항목만 남은 상태 — 클라는 유저가 해당 대화방에 진입할 때 삭제 안내를 띄우고, 유저 확인 시 §4로 삭제한다. 서버는 스레드 항목을 자동 삭제하지 않는다
 
 ## 3. POST /ai/v1/threads

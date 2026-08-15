@@ -20,6 +20,13 @@ class ThreadOut(CamelModel):
     needs_deletion: bool          # 보존 기한(14일) 경과 — 클라는 진입 시 삭제 안내를 띄운다(§2)
 
 
+class ThreadListData(CamelModel):
+    """스레드 목록 응답의 data (§2) — items에 생성 가능 여부가 얹힌다."""
+
+    items: list[ThreadOut]
+    can_create_thread: bool   # 정원(10개) 미달 여부 — §3 생성 시도 전에 클라가 버튼을 잠근다
+
+
 class ThreadCreated(CamelModel):
     thread_id: str
     created_at: str

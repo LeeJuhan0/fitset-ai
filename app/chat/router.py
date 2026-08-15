@@ -1,6 +1,6 @@
 """채팅 도메인 라우터. HTTP 입출력만 담당한다.
 
-목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 10개 전체 반환(ItemsData),
+목록 응답에 `page` 객체는 없다(§공통). 스레드 목록은 최대 10개 전체 반환(ThreadListData — items + canCreateThread),
 메시지 목록만 커서 페이지네이션(MessagePageData — cursor·limit·nextCursor, §4.5).
 메시지 전송은 SSE 스트리밍(§4.6) — 이벤트의 프레임 직렬화(delta·done·error)는
 전송 형식이므로 여기(HTTP 계층)가 맡고, 하트비트 삽입은 core/sse, service는 의미 이벤트만 낸다.
@@ -19,10 +19,10 @@ from app.chat.schemas import (
     MessageSendRequest,
     MessageStreamEvent,
     ThreadCreated,
-    ThreadOut,
+    ThreadListData,
 )
 from app.core import sse
-from app.core.schemas import ApiResponse, ItemsData
+from app.core.schemas import ApiResponse
 
 # 라우터의 모든 엔드포인트에 액세스 토큰 인증을 강제한다
 router = APIRouter(
@@ -32,14 +32,14 @@ router = APIRouter(
 )
 
 
-@router.get("/threads", response_model=ApiResponse[ItemsData[ThreadOut]])
+@router.get("/threads", response_model=ApiResponse[ThreadListData])
 async def list_threads(
     user_id: str = Depends(deps.get_current_user_id),
     trace_id: str = Depends(deps.get_trace_id),
-) -> ApiResponse[ItemsData[ThreadOut]]:
-    """스레드 목록을 최근 활동순으로 반환한다."""
-    threads = await service.list_threads(user_id)
-    return ApiResponse(trace_id=trace_id, data=ItemsData(items=threads))
+) -> ApiResponse[ThreadListData]:
+    """스레드 목록을 최근 활동순으로 반환한다. canCreateThread로 생성 가능 여부를 함께 준다."""
+    data = await service.list_threads(user_id)
+    return ApiResponse(trace_id=trace_id, data=data)
 
 
 @router.post("/threads", status_code=status.HTTP_201_CREATED, response_model=ApiResponse[ThreadCreated])
