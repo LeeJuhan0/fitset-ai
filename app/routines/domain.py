@@ -17,23 +17,59 @@ DEFAULT_GOAL = "hypertrophy"   # 프로필 goal 미입력(null) 시 기본값 �
 LEVEL_FACTOR = {"beginner": 1.0, "intermediate": 1.3, "advanced": 1.6}
 GOAL_FACTOR = {"strength": 1.1, "hypertrophy": 1.0, "weightLoss": 0.9, "endurance": 0.9}
 
-# 패턴 그룹 → (남, 여) 체중 비율 — 무게 추천 C 계층 초기 e1RM
+# 패턴 그룹 → (남, 여) 체중 비율 — 무게 추천 C 계층 초기 e1RM.
+# 바벨·머신 같은 양손 기준 부하로 표기하고, 한 손 장비는 baseline_e1rm이 절반으로 환산한다.
 PATTERN_RATIO = {
-    "squat": (0.50, 0.40),
-    "hinge": (0.60, 0.45),
-    "push_horizontal": (0.35, 0.20),
-    "push_vertical": (0.25, 0.15),
-    "pull": (0.35, 0.25),
-    "isolation": (0.10, 0.07),
+    "squat": (0.70, 0.55),
+    "hinge": (0.90, 0.68),
+    "push_horizontal": (0.55, 0.32),
+    "push_vertical": (0.38, 0.23),
+    "pull": (0.50, 0.35),
+    "isolation": (0.30, 0.20),
+    "isolation_small": (0.20, 0.13),
+}
+
+# 고립 종목 중 절대 부하가 확연히 낮은 주동근 — 레이즈·리스트 컬 계열이 컬과 같은 값을 받지 않게 가른다
+SMALL_ISOLATION_MUSCLES = frozenset({"Shoulders", "Forearms", "Triceps"})
+
+# 무게가 한 손 기준인 장비 — 초기 추정과 상한을 절반으로 본다
+PER_HAND_EQUIPMENT = frozenset({"Dumbbell", "Kettlebell"})
+
+# 장비별 부하 계수 — 패턴 비율이 바벨 기준이라 기구 특성만큼 보정한다.
+# 프리웨이트는 좌우를 따로 잡느라 안정화에 힘을 쓰고, 머신은 궤도가 고정돼 더 들 수 있다.
+# 한 손 표기 환산(÷2)과는 별개다 — 이쪽은 단위가 아니라 실제 들 수 있는 부하의 차이다.
+EQUIPMENT_LOAD_FACTOR = {
+    "Barbell": 1.00,
+    "Machine": 1.15,   # 궤도가 고정돼 안정화 부담이 없다. 1.10은 5kg 반올림에 묻혀 바벨과 같은 값이 된다
+    "Cable Machine": 0.85,
+    "Dumbbell": 0.85,
+    "Kettlebell": 0.80,   # 무게 중심이 손 바깥이라 같은 무게도 덤벨보다 어렵다
 }
 
 # 장비별 무게 반올림 단위 (metadata equipment 표기 기준)
 EQUIPMENT_STEP = {
-    "Barbell": 2.5,
+    "Barbell": 5.0,      # 원판 2.5kg 한 쌍이 최소 증분
     "Dumbbell": 2.0,
     "Kettlebell": 2.0,
     "Machine": 5.0,
     "Cable Machine": 5.0,
+}
+
+# 장비별 최소 무게 — 이보다 가벼운 조합은 실물로 만들 수 없다
+EQUIPMENT_FLOOR = {
+    "Barbell": 20.0,     # 올림픽 봉
+    "Dumbbell": 2.0,
+    "Kettlebell": 4.0,
+    "Machine": 5.0,
+    "Cable Machine": 5.0,
+}
+
+# 봉을 쓰지 않거나 봉이 가벼운 종목 — 장비 표기는 Barbell이지만 최소 무게가 다르다
+BAR_WEIGHT_OVERRIDE = {
+    "ez-bar-preacher-curl": 10.0,
+    "ez-bar-reverse-preacher-curl": 10.0,
+    "landmine-t-bar-rows": 10.0,   # 한쪽이 바닥에 고정돼 실효 부하가 봉 무게보다 작다
+    "plate-forward-lunge": 5.0,    # 원판 한 장 — 봉이 없다
 }
 E1RM_MAX_REPS = 12       # Epley 오차가 커지는 고렙 세트는 e1RM 계산에서 제외
 CROSS_EXERCISE_FACTOR = 0.8   # B 계층 — 종목 간 전이 안전 계수
@@ -70,6 +106,8 @@ def pattern_group(meta: dict) -> str:
         return "push_vertical" if "Shoulders" in primary else "push_horizontal"
     if "Pull" in patterns:
         return "pull"
+    if primary & SMALL_ISOLATION_MUSCLES:
+        return "isolation_small"
     return "isolation"
 
 
@@ -215,7 +253,26 @@ def baseline_e1rm(meta: dict, profile: dict) -> float:
     ratio = female_ratio if gender == "FEMALE" else male_ratio
     level = profile.get("level") or "beginner"
     goal = profile.get("goal") or DEFAULT_GOAL
-    return body_weight * ratio * LEVEL_FACTOR.get(level, 1.0) * GOAL_FACTOR.get(goal, 1.0)
+    equipment = weighted_equipment(meta.get("equipment", []))
+    e1rm = (
+        body_weight * ratio
+        * LEVEL_FACTOR.get(level, 1.0)
+        * GOAL_FACTOR.get(goal, 1.0)
+        * EQUIPMENT_LOAD_FACTOR.get(equipment, 1.0)
+    )
+    if equipment in PER_HAND_EQUIPMENT:
+        return e1rm / 2
+    return e1rm
+
+
+def min_weight(slug: str, equipment: list[str]) -> float:
+    """종목 최소 무게 — 빈 봉보다 가벼운 바벨 세트 같은 만들 수 없는 값을 막는다."""
+    matched = weighted_equipment(equipment)
+    if matched is None:
+        return 0.0
+    if slug in BAR_WEIGHT_OVERRIDE:
+        return BAR_WEIGHT_OVERRIDE[slug]
+    return EQUIPMENT_FLOOR.get(matched, 0.0)
 
 
 def recommend_weight(
@@ -241,7 +298,11 @@ def recommend_weight(
         else:                                  # C. 성별·체중·레벨·목표 초기값
             e1rm = baseline_e1rm(meta, profile)
 
-    return round_weight(weight_for_reps(e1rm, target_reps), meta.get("equipment", []))
+    equipment = meta.get("equipment", [])
+    weight = round_weight(weight_for_reps(e1rm, target_reps), equipment)
+    if weight is None:
+        return None
+    return max(weight, min_weight(slug, equipment))
 
 
 def set_duration_seconds(slug: str, level: str, fallback: int) -> int:
@@ -255,8 +316,11 @@ def set_duration_seconds(slug: str, level: str, fallback: int) -> int:
     return max(DURATION_STEP_SECONDS, int(stepped))
 
 
-def warmup_weight(weight: float | None, equipment: list[str]) -> float | None:
-    """워밍업 첫 세트 — 본 세트 무게의 절반을 장비 단위로 반올림."""
+def warmup_weight(slug: str, weight: float | None, equipment: list[str]) -> float | None:
+    """워밍업 첫 세트 — 본 세트 무게의 절반. 최소 무게 아래로는 못 내려간다."""
     if weight is None:
         return None
-    return round_weight(weight * WARMUP_FACTOR, equipment)
+    halved = round_weight(weight * WARMUP_FACTOR, equipment)
+    if halved is None:
+        return None
+    return max(halved, min_weight(slug, equipment))

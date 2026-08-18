@@ -241,7 +241,7 @@ def _build_response(
                     1, int(sets[0].duration_seconds * settings.warmup_duration_factor)
                 )
             else:
-                sets[0].weight = domain.warmup_weight(sets[0].weight, equipment) or 0
+                sets[0].weight = domain.warmup_weight(slug, sets[0].weight, equipment) or 0
         exercises.append(
             RoutineExerciseOut(
                 exercise_id=exercise_catalog.exercise_id(slug),

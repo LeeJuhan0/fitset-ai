@@ -46,6 +46,36 @@ META = {
         "equipment": ["Dumbbell"],
         "movementPattern": ["Isolation"],
     },
+    "barbell-curl": {
+        "slug": "barbell-curl",
+        "primaryMuscles": ["Biceps"],
+        "equipment": ["Barbell"],
+        "movementPattern": ["Isolation"],
+    },
+    "ez-bar-preacher-curl": {
+        "slug": "ez-bar-preacher-curl",
+        "primaryMuscles": ["Biceps"],
+        "equipment": ["Barbell"],
+        "movementPattern": ["Isolation"],
+    },
+    "dumbbell-lateral-raise": {
+        "slug": "dumbbell-lateral-raise",
+        "primaryMuscles": ["Shoulders"],
+        "equipment": ["Dumbbell"],
+        "movementPattern": ["Isolation"],
+    },
+    "machine-chest-press": {
+        "slug": "machine-chest-press",
+        "primaryMuscles": ["Chest"],
+        "equipment": ["Machine"],
+        "movementPattern": ["Push"],
+    },
+    "kettlebell-floor-press": {
+        "slug": "kettlebell-floor-press",
+        "primaryMuscles": ["Chest"],
+        "equipment": ["Kettlebell"],
+        "movementPattern": ["Push"],
+    },
 }
 
 ROUTINE = {
@@ -87,10 +117,10 @@ def _workouts_with(weight, reps, slug="barbell-bench-press"):
 
 
 def test_recommend_weight_tier_a_from_history():
-    # 60kg × 10렙 → e1RM 80 → 5렙 목표 = 80/(1+5/30) ≈ 68.6 → 바벨 2.5 단위 = 67.5
+    # 60kg × 10렙 → e1RM 80 → 5렙 목표 = 80/(1+5/30) ≈ 68.6 → 바벨 5 단위 = 70
     stats = domain.build_e1rm_stats(_workouts_with(60, 10), META)
     weight = domain.recommend_weight("barbell-bench-press", 5, stats, {}, META)
-    assert weight == 67.5
+    assert weight == 70.0
 
 
 def test_recommend_weight_tier_b_same_muscle_pattern_equipment():
@@ -140,8 +170,8 @@ def test_recommend_weight_tier_c_profile_based():
     stats = ({}, {})
     profile = {"gender": "MALE", "weightKg": 70, "level": "intermediate", "goal": "strength"}
     weight = domain.recommend_weight("barbell-overhead-press", 8, stats, profile, META)
-    expected_e1rm = 70 * 0.25 * 1.3 * 1.1
-    expected = round(domain.weight_for_reps(expected_e1rm, 8) / 2.5) * 2.5
+    expected_e1rm = 70 * domain.PATTERN_RATIO["push_vertical"][0] * 1.3 * 1.1
+    expected = round(domain.weight_for_reps(expected_e1rm, 8) / 5) * 5
     assert weight == expected
 
 
@@ -160,5 +190,49 @@ def test_e1rm_stats_skip_zero_weight_and_high_reps():
 
 
 def test_warmup_weight_half():
-    assert domain.warmup_weight(60.0, ["Barbell"]) == 30.0
-    assert domain.warmup_weight(None, ["Bodyweight"]) is None
+    assert domain.warmup_weight("barbell-bench-press", 60.0, ["Barbell"]) == 30.0
+    assert domain.warmup_weight("barbell-bench-press", None, ["Bodyweight"]) is None
+
+
+def test_warmup_weight_not_below_bar():
+    # 본 세트가 빈 봉이면 워밍업도 빈 봉이다 — 절반은 만들 수 없는 무게다
+    assert domain.warmup_weight("barbell-curl", 20.0, ["Barbell"]) == 20.0
+
+
+def test_recommend_weight_not_below_bar():
+    # 바벨 종목은 봉 무게 아래로 내려가지 않는다. EZ바는 봉이 가벼워 따로 본다
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    assert domain.recommend_weight("barbell-curl", 10, ({}, {}), profile, META) == 20.0
+    assert domain.recommend_weight("ez-bar-preacher-curl", 10, ({}, {}), profile, META) == 15.0
+
+
+def test_baseline_applies_equipment_factor_then_halves_per_hand():
+    # 같은 패턴이어도 장비별 부하 계수를 곱하고, 한 손 표기 장비만 다시 절반으로 나눈다
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    barbell = domain.baseline_e1rm(META["barbell-bench-press"], profile)
+    dumbbell = domain.baseline_e1rm(META["dumbbell-bench-press"], profile)
+    kettlebell = domain.baseline_e1rm(META["kettlebell-floor-press"], profile)
+    machine = domain.baseline_e1rm(META["machine-chest-press"], profile)
+    assert dumbbell == pytest.approx(barbell * 0.85 / 2)
+    assert kettlebell == pytest.approx(barbell * 0.80 / 2)
+    assert machine == pytest.approx(barbell * 1.15)
+
+
+def test_free_weight_total_load_below_barbell():
+    # 좌우를 따로 잡는 부담만큼 프리웨이트 양손 합이 바벨보다 낮아야 한다
+    profile = {"gender": "MALE", "weightKg": 80, "level": "beginner", "goal": "hypertrophy"}
+    barbell = domain.recommend_weight("barbell-bench-press", 10, ({}, {}), profile, META)
+    dumbbell = domain.recommend_weight("dumbbell-bench-press", 10, ({}, {}), profile, META)
+    machine = domain.recommend_weight("machine-chest-press", 10, ({}, {}), profile, META)
+    assert dumbbell * 2 < barbell
+    assert machine > barbell
+
+
+def test_small_muscle_isolation_stays_light():
+    # 레이즈 계열이 컬과 같은 비율을 받으면 초급에게 과해진다 — 주동근으로 그룹을 가른다
+    assert domain.pattern_group(META["dumbbell-lateral-raise"]) == "isolation_small"
+    assert domain.pattern_group(META["dumbbell-curl"]) == "isolation"
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    raise_weight = domain.recommend_weight("dumbbell-lateral-raise", 10, ({}, {}), profile, META)
+    curl_weight = domain.recommend_weight("dumbbell-curl", 10, ({}, {}), profile, META)
+    assert raise_weight < curl_weight
