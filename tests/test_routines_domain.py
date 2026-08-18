@@ -22,6 +22,30 @@ META = {
         "equipment": ["Barbell"],
         "movementPattern": ["Push"],
     },
+    "dumbbell-bench-press": {
+        "slug": "dumbbell-bench-press",
+        "primaryMuscles": ["Chest"],
+        "equipment": ["Dumbbell"],
+        "movementPattern": ["Push"],
+    },
+    "dumbbell-incline-bench-press": {
+        "slug": "dumbbell-incline-bench-press",
+        "primaryMuscles": ["Chest"],
+        "equipment": ["Dumbbell"],
+        "movementPattern": ["Push"],
+    },
+    "machine-underhand-row": {
+        "slug": "machine-underhand-row",
+        "primaryMuscles": ["Biceps"],
+        "equipment": ["Machine"],
+        "movementPattern": ["Pull"],
+    },
+    "dumbbell-curl": {
+        "slug": "dumbbell-curl",
+        "primaryMuscles": ["Biceps"],
+        "equipment": ["Dumbbell"],
+        "movementPattern": ["Isolation"],
+    },
 }
 
 ROUTINE = {
@@ -69,14 +93,46 @@ def test_recommend_weight_tier_a_from_history():
     assert weight == 67.5
 
 
-def test_recommend_weight_tier_b_same_muscle():
-    # bench 기록만 있는 유저의 다른 가슴 종목 → e1RM × 0.8
+def test_recommend_weight_tier_b_same_muscle_pattern_equipment():
+    # 덤벨 벤치 기록 → 같은 주동근·패턴·장비인 덤벨 인클라인 벤치로 전이. e1RM × 0.8
+    stats = domain.build_e1rm_stats(_workouts_with(20, 10, "dumbbell-bench-press"), META)
+    weight = domain.recommend_weight("dumbbell-incline-bench-press", 10, stats, {}, META)
+    expected = domain.weight_for_reps(domain.epley_e1rm(20, 10) * 0.8, 10)
+    assert weight == pytest.approx(round(expected / 2) * 2)
+
+
+def test_recommend_weight_no_transfer_across_equipment():
+    # 바벨 벤치 기록은 덤벨 벤치로 넘어가지 않는다 — 양손 무게가 한 손 무게로 둔갑하던 경로
     stats = domain.build_e1rm_stats(_workouts_with(60, 10), META)
-    meta = {**META, "dumbbell-bench-press": {
-        "slug": "dumbbell-bench-press", "primaryMuscles": ["Chest"],
-        "equipment": ["Dumbbell"], "movementPattern": ["Push"]}}
-    weight = domain.recommend_weight("dumbbell-bench-press", 10, stats, {}, meta)
-    assert weight == pytest.approx(48.0)   # 80×0.8=64 → 10렙 48 → 덤벨 2단위 48
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    weight = domain.recommend_weight("dumbbell-bench-press", 10, stats, profile, META)
+    baseline = domain.baseline_e1rm(META["dumbbell-bench-press"], profile)
+    assert weight == pytest.approx(round(domain.weight_for_reps(baseline, 10) / 2) * 2)
+
+
+def test_recommend_weight_no_transfer_compound_to_isolation():
+    # 머신 언더핸드 로우(이두 주동)의 무게가 덤벨 컬로 흘러들지 않는다 — 실기기 검증 26건의 원인
+    stats = domain.build_e1rm_stats(_workouts_with(90, 8, "machine-underhand-row"), META)
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    weight = domain.recommend_weight("dumbbell-curl", 10, stats, profile, META)
+    assert weight is not None and weight <= 10
+
+
+def test_recommend_weight_tier_b_capped_by_baseline_multiple():
+    # 같은 키라도 전이값이 과하면 초기 추정의 3배에서 잘린다
+    stats = domain.build_e1rm_stats(_workouts_with(200, 5, "dumbbell-bench-press"), META)
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    weight = domain.recommend_weight("dumbbell-incline-bench-press", 10, stats, profile, META)
+    cap = domain.baseline_e1rm(META["dumbbell-incline-bench-press"], profile) * domain.E1RM_CAP_MULTIPLE
+    assert weight == pytest.approx(round(domain.weight_for_reps(cap, 10) / 2) * 2)
+
+
+def test_recommend_weight_tier_a_not_capped():
+    # 실측은 상한을 받지 않는다 — 유저가 실제로 든 무게라 초기 추정보다 커도 그대로 쓴다
+    stats = domain.build_e1rm_stats(_workouts_with(120, 5), META)
+    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
+    weight = domain.recommend_weight("barbell-bench-press", 5, stats, profile, META)
+    assert weight == pytest.approx(120.0)
 
 
 def test_recommend_weight_tier_c_profile_based():
@@ -98,9 +154,9 @@ def test_e1rm_stats_skip_zero_weight_and_high_reps():
         {"weight": 0, "reps": 10},     # 맨몸/미기록 인코딩 — 제외
         {"weight": 60, "reps": 20},    # 12렙 초과 — Epley 오차로 제외
     ]}]}]
-    by_slug, by_muscle = domain.build_e1rm_stats(workouts, META)
+    by_slug, by_transfer = domain.build_e1rm_stats(workouts, META)
     assert by_slug == {}
-    assert by_muscle == {}
+    assert by_transfer == {}
 
 
 def test_warmup_weight_half():

@@ -1,7 +1,7 @@
 """루틴 도메인 순수 로직 — I/O 없는 함수·상수만.
 
 룰 필터는 CLAUDE.md 확정 규칙(2026-07-25), 무게 추천은 docs/무게 추천.md의
-Epley e1RM 3계층 폴백(실측 → 주동근 유추×0.8 → 성별·체중×레벨×목표)을 구현한다.
+Epley e1RM 3계층 폴백(실측 → 같은 주동근·패턴·장비 전이×0.8 → 성별·체중×레벨×목표)을 구현한다.
 """
 import json
 import re
@@ -37,6 +37,8 @@ EQUIPMENT_STEP = {
 }
 E1RM_MAX_REPS = 12       # Epley 오차가 커지는 고렙 세트는 e1RM 계산에서 제외
 CROSS_EXERCISE_FACTOR = 0.8   # B 계층 — 종목 간 전이 안전 계수
+E1RM_CAP_MULTIPLE = 3.0       # B 계층 상한 — C 계층 초기 추정의 배수
+DEFAULT_BODY_WEIGHT = 70.0    # 체중 미기록 시 초기값 추정에 쓰는 기본 체중
 WARMUP_FACTOR = 0.5
 
 # 시간 종목(exerciseType=DURATION) 세트 길이 — 원본 캐글 루틴이 플랭크마저 "10회"처럼
@@ -69,6 +71,25 @@ def pattern_group(meta: dict) -> str:
     if "Pull" in patterns:
         return "pull"
     return "isolation"
+
+
+def weighted_equipment(equipment: list[str]) -> str | None:
+    """무게 단위를 가진 장비 하나를 고른다."""
+    return next((e for e in equipment if e in EQUIPMENT_STEP), None)
+
+
+def transfer_keys(meta: dict) -> list[tuple[str, str, str]]:
+    """e1RM 전이 키 — 주동근·패턴 그룹·장비가 모두 같은 종목끼리만 무게를 옮긴다.
+
+    근육만으로 묶으면 머신 로우의 e1RM이 덤벨 컬로, 파머스 캐리가 리스트 컬로 흘러들어
+    팔 고립 종목에 들 수 없는 무게가 나간다(2026-08-13 실기기 검증 26건). 장비를 키에
+    넣어 바벨 양손 무게가 덤벨 한 손 무게로 그대로 넘어가는 것도 함께 막는다.
+    """
+    equipment = weighted_equipment(meta.get("equipment", []))
+    if equipment is None:
+        return []
+    group = pattern_group(meta)
+    return [(muscle.lower(), group, equipment) for muscle in meta.get("primaryMuscles", [])]
 
 
 def effective_avoided(avoided: list[str] | None, requested: list[str]) -> set[str]:
@@ -150,15 +171,17 @@ def weight_for_reps(e1rm: float, reps: int) -> float:
 
 
 def build_e1rm_stats(workouts: list[dict], meta_by_slug: dict) -> tuple[dict, dict]:
-    """기록에서 (종목별, 주동근별) 최대 e1RM을 뽑는다 — 무게 추천 A·B 계층 입력.
+    """기록에서 (종목별, 전이키별) 최대 e1RM을 뽑는다 — 무게 추천 A·B 계층 입력.
 
     weight=0(맨몸/미기록 인코딩)과 12렙 초과 세트는 제외한다.
     """
     by_slug: dict[str, float] = {}
-    by_muscle: dict[str, float] = {}
+    by_transfer: dict[tuple[str, str, str], float] = {}
     for session in workouts:
         for exercise in session.get("exercises", []):
             slug = _exercise_slug(exercise)
+            meta = meta_by_slug.get(slug)
+            keys = transfer_keys(meta) if meta else []
             for set_record in exercise.get("sets", []):
                 weight = set_record.get("weight") or 0
                 reps = set_record.get("reps") or 0
@@ -166,19 +189,33 @@ def build_e1rm_stats(workouts: list[dict], meta_by_slug: dict) -> tuple[dict, di
                     continue
                 e1rm = epley_e1rm(weight, reps)
                 by_slug[slug] = max(by_slug.get(slug, 0), e1rm)
-                meta = meta_by_slug.get(slug)
-                for muscle in (meta or {}).get("primaryMuscles", []):
-                    key = muscle.lower()
-                    by_muscle[key] = max(by_muscle.get(key, 0), e1rm)
-    return by_slug, by_muscle
+                for key in keys:
+                    by_transfer[key] = max(by_transfer.get(key, 0), e1rm)
+    return by_slug, by_transfer
 
 
 def round_weight(weight: float, equipment: list[str]) -> float | None:
     """장비별 단위로 반올림. 무게 개념이 없는 장비(맨몸·밴드)는 None."""
-    step = next((EQUIPMENT_STEP[e] for e in equipment if e in EQUIPMENT_STEP), None)
-    if step is None:
+    matched = weighted_equipment(equipment)
+    if matched is None:
         return None
+    step = EQUIPMENT_STEP[matched]
     return max(step, round(weight / step) * step)
+
+
+def baseline_e1rm(meta: dict, profile: dict) -> float:
+    """C 계층 초기 e1RM — 성별·체중·수준·목표 추정값. B 계층 상한의 기준선이기도 하다.
+
+    level은 요청이 아니라 프로필을 쓴다. 요청 난이도는 이번 세션을 얼마나 세게 할지의
+    선택이지 그 사람의 근력이 바뀐 것이 아니다.
+    """
+    body_weight = profile.get("weightKg") or DEFAULT_BODY_WEIGHT
+    gender = (profile.get("gender") or "MALE").upper()
+    male_ratio, female_ratio = PATTERN_RATIO[pattern_group(meta)]
+    ratio = female_ratio if gender == "FEMALE" else male_ratio
+    level = profile.get("level") or "beginner"
+    goal = profile.get("goal") or DEFAULT_GOAL
+    return body_weight * ratio * LEVEL_FACTOR.get(level, 1.0) * GOAL_FACTOR.get(goal, 1.0)
 
 
 def recommend_weight(
@@ -193,22 +230,16 @@ def recommend_weight(
     if meta is None or "Bodyweight" in meta.get("equipment", []):
         return None
 
-    by_slug, by_muscle = stats
-    if slug in by_slug:                                    # A. 해당 종목 실측
+    by_slug, by_transfer = stats
+    if slug in by_slug:                        # A. 해당 종목 실측 — 유저가 실제로 든 무게라 상한을 걸지 않는다
         e1rm = by_slug[slug]
     else:
-        muscles = [m.lower() for m in meta.get("primaryMuscles", [])]
-        known = [by_muscle[m] for m in muscles if m in by_muscle]
-        if known:                                          # B. 같은 주동근 유추
-            e1rm = max(known) * CROSS_EXERCISE_FACTOR
-        else:                                              # C. 성별·체중·레벨·목표 초기값
-            body_weight = profile.get("weightKg") or 70.0
-            gender = (profile.get("gender") or "MALE").upper()
-            male_ratio, female_ratio = PATTERN_RATIO[pattern_group(meta)]
-            ratio = female_ratio if gender == "FEMALE" else male_ratio
-            level = profile.get("level") or "beginner"
-            goal = profile.get("goal") or DEFAULT_GOAL
-            e1rm = body_weight * ratio * LEVEL_FACTOR.get(level, 1.0) * GOAL_FACTOR.get(goal, 1.0)
+        known = [by_transfer[key] for key in transfer_keys(meta) if key in by_transfer]
+        if known:                              # B. 같은 주동근·패턴·장비에서 전이, 초기 추정 배수로 상한
+            cap = baseline_e1rm(meta, profile) * E1RM_CAP_MULTIPLE
+            e1rm = min(max(known) * CROSS_EXERCISE_FACTOR, cap)
+        else:                                  # C. 성별·체중·레벨·목표 초기값
+            e1rm = baseline_e1rm(meta, profile)
 
     return round_weight(weight_for_reps(e1rm, target_reps), meta.get("equipment", []))
 
