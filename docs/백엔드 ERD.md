@@ -1,22 +1,24 @@
 # 백엔드(Spring) DB ERD — 참조 문서
 
-백엔드 스프링 서버가 보유한 MySQL ERD (2026-08-12 백엔드 공유본 — 구현 스키마 `schema.sql` + JPA 엔티티 기준).
-**AI 서버는 이 DB를 직접 조회한다** (2026-08-12 내부 API 파기 합의) — 읽기 전용 계정 `fitset_readonly`, 코드 사본은 `app/clients/backend_schema.py`(SQLAlchemy 엔티티). 구 [내부 API 명세](백엔드%20내부%20API%20명세.md)는 폐기.
+> 2026-08-25 백엔드 리팩토링(#92·#93·#95·#96·#98·#99) 공유본(fitset_app_01_04)으로 본문 교체 완료, AI 서버 엔티티도 반영 완료. 요지: 단위 접미사 제거(height_cm→height 등), body_weight_log→body_weight_history·routine\*→workout_template\*·workout\*→workout_history\* 개명, active_duration_seconds→pause_seconds(순수 운동 시간은 경과-일시정지로 유도), slug 컬럼 삭제(thumbnail_key 자연키 대체 — AI 서버는 키 파일명에서 slug를 계산 컬럼으로 유도).
+
+백엔드 스프링 서버가 보유한 MySQL ERD (2026-08-25 백엔드 공유본 — 구현 스키마 `schema.sql` + JPA 엔티티 기준).
+**AI 서버는 이 DB를 직접 조회한다** (2026-08-12 내부 API 파기 합의) — 읽기 전용 계정 `fitset_readonly`, 코드 사본은 각 도메인 패키지 `domain.py`(SQLAlchemy 엔티티, 공유 베이스 core/orm). 구 [내부 API 명세](백엔드%20내부%20API%20명세.md)는 폐기.
 이 문서는 직조회 계약·데이터 정합성 검토를 위한 **참조용 사본**이며, 정본은 백엔드 리포.
 
 - DB: MySQL, PK는 전 테이블 `id` `BINARY(16)` UUID (Hibernate `@UuidGenerator` TIME)
 - enum은 MySQL 네이티브 ENUM, 값은 대문자 (Hibernate `EnumType.STRING`)
 - 시간 컬럼은 `datetime(6)`, `ON UPDATE CURRENT_TIMESTAMP` 미사용 (Hibernate `updated_at`을 DB가 덮어쓰지 않게)
-- 완료된 운동 기록은 `workout*` 계층, 운동 템플릿은 `routine*` 계층
+- 완료된 운동 기록은 `workout_history*` 계층, 운동 템플릿은 `workout_template*` 계층
 
 ## 테이블 구성 한눈에
 
 | 계층 | 테이블 | 역할 |
 |---|---|---|
-| 유저 | `users` · `user_profile` · `user_avoided_muscle` · `refresh_token` · `body_weight_log` | 계정(소셜), 프로필(1:1), 기피 부위(N:M), 리프레시 토큰(유저당 1건), 체중 추이 |
-| 운동 마스터 | `exercise` · `equipment` · `muscle` · `exercise_muscle` | 종목(slug unique) · 장비·근육 마스터(slug 신설) · 주동/보조근 매핑(role 포함 unique) |
-| 템플릿(계획) | `routine` · `routine_exercise` · `routine_set` | 루틴 → 운동(순서) → 세트(기본 무게·목표 렙·목표 시간). `is_ai_generated` 플래그 |
-| 로그(완료 기록) | `workout` · `workout_exercise` · `workout_set` | 세션 → 수행 운동 → 세트(실측 kg·렙·수행/휴식 초) |
+| 유저 | `users` · `user_profile` · `user_avoided_muscle` · `refresh_token` · `body_weight_history` | 계정(소셜), 프로필(1:1), 기피 부위(N:M), 리프레시 토큰(유저당 1건), 체중 추이 |
+| 운동 마스터 | `exercise` · `equipment` · `muscle` · `exercise_muscle` | 종목(thumbnail_key 자연키) · 장비·근육 마스터(thumbnail_key·description) · 주동/보조근 매핑(role 포함 unique) |
+| 템플릿(계획) | `workout_template` · `workout_template_exercise` · `workout_template_set` | 루틴 → 운동(순서) → 세트(기본 무게·목표 렙·목표 시간). `is_ai_generated` 플래그 |
+| 로그(완료 기록) | `workout_history` · `workout_history_exercise` · `workout_history_set` | 세션 → 수행 운동 → 세트(실측 kg·렙·수행/휴식 초). `pause_seconds`로 순수 운동 시간 유도 |
 | 소셜 | `user_follow` · `feed` · `feed_media` · `feed_like` · `feed_comment` · `feed_comment_like` | 팔로우 그래프, 피드(운동 기록 공유 가능), 미디어, 좋아요, 댓글, 댓글 좋아요 |
 
 친구 추천은 별도 영속 데이터 없이 `user_follow`·`user_profile` 기반 조회 로직으로 계산한다.
@@ -26,46 +28,13 @@
 ```dbml
 Project fitset_app_01_04 {
   database_type: 'MySQL'
-
-  Note: '''
-  현재 구현된 스키마(src/main/resources/db/schema.sql + JPA 엔티티) 기준 ERD.
-
-  식별자는 BINARY(16) UUID(Hibernate @UuidGenerator TIME), PK 컬럼명은 전 테이블 id.
-  완료된 운동 기록은 workout 계층, 운동 템플릿은 routine 계층.
-
-  순서 컬럼은 order_index(0-based), 시간 컬럼은 *_seconds(int).
-
-  enum 은 MySQL 네이티브 ENUM 이며 값은 대문자(Hibernate EnumType.STRING).
-  문자열은 utf8mb4_unicode_ci.
-
-  created_at/updated_at 은 BaseTimeEntity 가 값을 채우며,
-  DB DEFAULT 는 컬럼을 명시하지 않는 seed INSERT 를 위한 보루다.
-
-  ON UPDATE CURRENT_TIMESTAMP 는 쓰지 않는다.
-  Hibernate 가 쓴 updated_at 을 DB 가 덮어써 값이 어긋나는 것을 방지한다.
-
-  성능용 보조 인덱스는 이 문서에서 다루지 않고
-  PK 및 유니크 제약 위주로 표기한다.
-
-  소셜 계층:
-  - user_follow: 회원 간 팔로우 관계
-  - feed: 회원이 작성한 피드
-  - feed_media: 피드 첨부 미디어
-  - feed_like: 피드 좋아요
-  - feed_comment: 피드 댓글
-  - feed_comment_like: 댓글 좋아요
-
-  친구 추천은 별도 영속 데이터가 아니라
-  user_follow, user_profile 등의 데이터를 기반으로 계산하는 조회 로직으로 본다.
-  '''
+  Note: '현재 구현된 스키마(src/main/resources/db/schema.sql + JPA 엔티티) 기준 ERD. 식별자는 BINARY(16) UUID(Hibernate @UuidGenerator TIME), PK 컬럼명은 전 테이블 id. 완료된 운동 기록은 workout_history 계층, 운동 템플릿은 workout_template 계층. 순서 컬럼은 order_index(0-based), 시간 컬럼은 *_seconds(int). enum 은 MySQL 네이티브 ENUM 이며 값은 대문자(Hibernate EnumType.STRING). 문자열은 utf8mb4_unicode_ci. created_at/updated_at 은 BaseTimeEntity 가 값을 채우며, DB DEFAULT 는 컬럼을 명시하지 않는 seed INSERT 를 위한 보루다. ON UPDATE CURRENT_TIMESTAMP 는 쓰지 않는다(Hibernate 가 쓴 updated_at 을 DB 가 덮어써 값이 어긋난다). 성능용 보조 인덱스는 이 문서에서 다루지 않고 유니크 제약만 표기한다.'
 }
-
 
 Enum muscle_role {
   PRIMARY   [note: '주동근']
   SECONDARY [note: '보조근']
 }
-
 
 Enum difficulty_level {
   BEGINNER     [note: '초급']
@@ -73,19 +42,16 @@ Enum difficulty_level {
   ADVANCED     [note: '고급']
 }
 
-
 Enum exercise_type {
   WEIGHT_AND_REPS [note: '무게 × 횟수 (예: 벤치프레스, 밴드 컬)']
   REPS_ONLY       [note: '횟수만 (예: 푸쉬업, 풀업)']
   DURATION        [note: '시간 (예: 플랭크, 트레드밀)']
 }
 
-
 Enum gender {
   MALE   [note: '남']
   FEMALE [note: '여']
 }
-
 
 Enum workout_goal {
   HYPERTROPHY [note: '근비대']
@@ -94,15 +60,13 @@ Enum workout_goal {
   ENDURANCE   [note: '체력유지']
 }
 
-
 // ── 유저 ─────────────────────────────────────────────
 
 Table users {
   id               binary(16)   [pk]
-  provider         varchar(20)  [not null, note: 'kakao·apple']
+  provider         varchar(20)  [not null, note: 'KAKAO·GOOGLE (AuthProvider)']
   provider_user_id varchar(255) [not null]
   email            varchar(255) [not null]
-
   created_at       datetime(6)  [not null, default: `now(6)`]
   updated_at       datetime(6)  [not null, default: `now(6)`]
 
@@ -111,35 +75,28 @@ Table users {
   }
 }
 
-
 Table user_profile {
   id                binary(16)       [pk]
   user_id           binary(16)       [not null, ref: - users.id, note: '1:1']
-
   nickname          varchar(255)     [not null]
   profile_image_url varchar(500)     [not null]
-
   gender            gender           [not null]
   birth_date        date             [not null]
-  height_cm         decimal(5,1)     [not null]
-
+  height            decimal(5,1)     [not null]
   workout_goal      workout_goal     [not null, note: '운동 목적']
   level             difficulty_level [not null, note: '사용자 수준']
-
   created_at        datetime(6)      [not null, default: `now(6)`]
   updated_at        datetime(6)      [not null, default: `now(6)`]
 
   indexes {
-    user_id [unique, name: 'uk_user_profile_user']
+    user_id [unique, name: 'uk_user_profile_user']  // FK UNIQUE 로 1:1 강제
   }
 }
-
 
 Table user_avoided_muscle {
   id         binary(16)  [pk]
   user_id    binary(16)  [not null, ref: > users.id]
   muscle_id  binary(16)  [not null, ref: > muscle.id]
-
   created_at datetime(6) [not null, default: `now(6)`]
   updated_at datetime(6) [not null, default: `now(6)`]
 
@@ -148,14 +105,11 @@ Table user_avoided_muscle {
   }
 }
 
-
 Table refresh_token {
   id          binary(16)   [pk]
   user_id     binary(16)   [not null, ref: - users.id, note: '유저당 1건(재발급 시 교체)']
-
   token_value varchar(255) [not null]
   expires_at  datetime(6)  [not null]
-
   created_at  datetime(6)  [not null, default: `now(6)`]
   updated_at  datetime(6)  [not null, default: `now(6)`]
 
@@ -164,250 +118,133 @@ Table refresh_token {
   }
 }
 
-
-Table body_weight_log {
-  id          binary(16)   [pk]
-  user_id     binary(16)   [not null, ref: > users.id]
-
-  weight_kg   decimal(5,2) [not null]
-  measured_at datetime(6)  [not null, note: '측정 시각. 하루 여러 건 허용(유니크 제약 없음)']
-
-  created_at  datetime(6)  [not null, default: `now(6)`]
-  updated_at  datetime(6)  [not null, default: `now(6)`]
+Table body_weight_history {
+  id          binary(16)    [pk]
+  user_id     binary(16)    [not null, ref: > users.id]
+  weight      decimal(5,2)  [not null]
+  measured_at datetime(6)   [not null, note: '측정 시각. 하루 여러 건 허용(유니크 제약 없음)']
+  created_at  datetime(6)   [not null, default: `now(6)`]
+  updated_at  datetime(6)   [not null, default: `now(6)`]
 }
-
 
 // ── 운동 마스터 ───────────────────────────────────────
 
 Table exercise {
   id            binary(16)       [pk]
-
-  slug          varchar(255)     [unique, not null, note: 'URL·식별용']
   name          varchar(255)     [not null]
-
+  thumbnail_key varchar(255)     [unique, not null, note: '썸네일 객체 키. 종목 식별용 자연키를 겸한다']
+  video_key     varchar(255)     [not null, note: '시연 영상 객체 키']
   equipment_id  binary(16)       [not null, ref: > equipment.id, note: '맨몸운동도 장비 레코드로 존재']
-
   difficulty    difficulty_level [not null, note: '난이도']
   exercise_type exercise_type    [not null, note: '기록 방식(무게·횟수·시간)']
-
   instructions  json             [not null, note: '운동 수행 방법']
-
   created_at    datetime(6)      [not null, default: `now(6)`]
   updated_at    datetime(6)      [not null, default: `now(6)`]
 }
 
-
-// ── 근육 그룹 · 장비 ──────────────────────────────────
+// ── 근육 그룹 · 장비 (마스터 + 다대일/다대다) ────────────────────
 
 Table equipment {
-  id         binary(16)   [pk]
-
-  slug       varchar(255) [unique, not null, note: 'URL·식별용']
-  name       varchar(255) [not null, note: '맨몸·바벨·덤벨·머신·케이블·케틀벨·밴드']
-
-  created_at datetime(6)  [not null, default: `now(6)`]
-  updated_at datetime(6)  [not null, default: `now(6)`]
+  id            binary(16)   [pk]
+  thumbnail_key varchar(255) [unique, not null, note: '썸네일 객체 키. 식별용 자연키를 겸한다']
+  name          varchar(255) [not null, note: '맨몸·바벨·덤벨·머신·케이블·케틀벨·밴드']
+  description   varchar(255) [not null, note: '한 줄 설명']
+  created_at    datetime(6)  [not null, default: `now(6)`]
+  updated_at    datetime(6)  [not null, default: `now(6)`]
 }
-
 
 Table muscle {
-  id         binary(16)   [pk]
-
-  slug       varchar(255) [unique, not null, note: 'URL·식별용']
-  name       varchar(255) [not null, note: '가슴·등·어깨·팔·다리·코어 등']
-
-  created_at datetime(6)  [not null, default: `now(6)`]
-  updated_at datetime(6)  [not null, default: `now(6)`]
+  id            binary(16)   [pk]
+  thumbnail_key varchar(255) [unique, not null, note: '썸네일 객체 키. 식별용 자연키를 겸한다']
+  name          varchar(255) [not null, note: '가슴·등·어깨·팔·다리·코어 등']
+  description   varchar(255) [not null, note: '한 줄 설명']
+  created_at    datetime(6)  [not null, default: `now(6)`]
+  updated_at    datetime(6)  [not null, default: `now(6)`]
 }
-
 
 Table exercise_muscle {
   id          binary(16)  [pk]
-
   exercise_id binary(16)  [not null, ref: > exercise.id]
   muscle_id   binary(16)  [not null, ref: > muscle.id]
-
   role        muscle_role [not null, note: 'PRIMARY(주)·SECONDARY(보조)']
-
   created_at  datetime(6) [not null, default: `now(6)`]
   updated_at  datetime(6) [not null, default: `now(6)`]
 
   indexes {
-    (exercise_id, muscle_id, role) [unique, name: 'uk_exercise_muscle']
+    (exercise_id, muscle_id, role) [unique, name: 'uk_exercise_muscle']  // 시드를 멱등하게 재실행하기 위한 자연키
   }
 }
 
+// ── 템플릿 계층 (운동 계획) ──────────────────────────────
 
-// ── 템플릿 계층 (운동 계획) ───────────────────────────
-
-Table routine {
+Table workout_template {
   id              binary(16)   [pk]
   user_id         binary(16)   [not null, ref: > users.id]
-
   name            varchar(255) [not null]
-
   is_ai_generated boolean      [not null, note: 'AI 로 생성된 루틴 여부. MySQL BIT(1)']
-
   created_at      datetime(6)  [not null, default: `now(6)`]
   updated_at      datetime(6)  [not null, default: `now(6)`]
 }
 
-
-Table routine_exercise {
+Table workout_template_exercise {
   id          binary(16)  [pk]
-
-  routine_id  binary(16)  [not null, ref: > routine.id]
-
-  exercise_id binary(16)  [
-    not null,
-    ref: > exercise.id,
-    note: 'DB FK 는 있으나 엔티티는 UUID 값으로만 참조'
-  ]
-
+  workout_template_id  binary(16)  [not null, ref: > workout_template.id]
+  exercise_id binary(16)  [not null, ref: > exercise.id, note: 'DB FK 는 있으나 엔티티는 UUID 값으로만 참조']
   order_index int         [not null, note: '루틴 내 운동 순서(0-based)']
-
   created_at  datetime(6) [not null, default: `now(6)`]
   updated_at  datetime(6) [not null, default: `now(6)`]
 }
 
-
-Table routine_set {
+Table workout_template_set {
   id                      binary(16)   [pk]
-
-  routine_exercise_id     binary(16)   [
-    not null,
-    ref: > routine_exercise.id
-  ]
-
+  workout_template_exercise_id     binary(16)   [not null, ref: > workout_template_exercise.id]
   order_index             int          [not null, note: '세트 순서(0-based)']
-
-  default_weight_kg       decimal(6,2) [not null, default: 0, note: '0=미지정']
+  default_weight          decimal(6,2) [not null, default: 0, note: '0=미지정']
   target_reps             int          [not null, default: 0, note: '0=미지정']
   target_duration_seconds int          [not null, default: 0, note: '시간형 종목 목표 시간(초). 0=미지정']
-
   created_at              datetime(6)  [not null, default: `now(6)`]
   updated_at              datetime(6)  [not null, default: `now(6)`]
 
-  Note: '''
-  어느 값이 유효한지는 조회 시점에 exercise_type 으로 판단한다.
-  타입별 필수값을 컬럼 제약으로 강제하지 않는다.
-  '''
+  Note: '어느 값이 유효한지는 조회 시점에 exercise_type 으로 판단한다. 타입별 필수값을 컬럼 제약으로 강제하지 않는다.'
 }
 
+// ── 로그 계층 (완료된 수행 기록) ─────────────────────────
 
-// ── 로그 계층 (완료된 수행 기록) ──────────────────────
-
-Table workout {
+Table workout_history {
   id                      binary(16)  [pk]
-
   user_id                 binary(16)  [not null, ref: > users.id]
-
-  routine_id              binary(16)  [
-    ref: > routine.id,
-    note: '시작한 루틴(빈 운동이면 NULL). ON DELETE SET NULL — 루틴이 삭제돼도 세션 기록은 남는다'
-  ]
-
+  workout_template_id              binary(16)  [ref: > workout_template.id, note: '시작한 루틴(빈 운동이면 NULL). ON DELETE SET NULL — 루틴이 삭제돼도 세션 기록은 남는다']
   started_at              datetime(6) [not null]
   ended_at                datetime(6) [not null]
-
-  active_duration_seconds int         [
-    not null,
-    note: '휴식 제외 실제 운동 시간(초)'
-  ]
-
+  pause_seconds           int         [not null, note: '일시정지 시간(초). 실제 운동 시간은 (ended_at - started_at) - pause_seconds 로 유도']
   created_at              datetime(6) [not null, default: `now(6)`]
   updated_at              datetime(6) [not null, default: `now(6)`]
 }
 
-
-Table workout_exercise {
+Table workout_history_exercise {
   id          binary(16)  [pk]
-
-  workout_id  binary(16)  [not null, ref: > workout.id]
-
-  exercise_id binary(16)  [
-    not null,
-    ref: > exercise.id,
-    note: 'DB FK 는 있으나 엔티티는 UUID 값으로만 참조'
-  ]
-
+  workout_history_id  binary(16)  [not null, ref: > workout_history.id]
+  exercise_id binary(16)  [not null, ref: > exercise.id, note: 'DB FK 는 있으나 엔티티는 UUID 값으로만 참조']
   order_index int         [not null, note: '운동 내 수행 순서(0-based)']
-
   created_at  datetime(6) [not null, default: `now(6)`]
   updated_at  datetime(6) [not null, default: `now(6)`]
 }
 
-
-Table workout_set {
+Table workout_history_set {
   id                  binary(16)   [pk]
-
-  workout_exercise_id binary(16)   [
-    not null,
-    ref: > workout_exercise.id
-  ]
+  workout_history_exercise_id binary(16)   [not null, ref: > workout_history_exercise.id]
 
   order_index         int          [not null, note: '세트 순서(0-based)']
 
-  duration_seconds    int          [
-    not null,
-    note: '세트 수행 시간(초) — 항상 기록'
-  ]
+  duration_seconds    int          [not null, note: '세트 수행 시간(초) — 항상 기록']
+  rest_seconds        int          [not null, note: '다음 세트까지 휴식 시간(초). 0=휴식 없음/마지막 세트']
 
-  rest_seconds        int          [
-    not null,
-    note: '다음 세트까지 휴식 시간(초). 0=휴식 없음/마지막 세트'
-  ]
-
-  weight_kg           decimal(6,2) [
-    not null,
-    note: '실제 수행 kg. 0=맨몸운동'
-  ]
-
-  reps                int          [
-    not null,
-    note: '실제 수행 횟수 — 항상 기록'
-  ]
+  weight              decimal(6,2) [not null, note: '실제 수행 kg. 0=맨몸운동']
+  reps                int          [not null, note: '실제 수행 횟수 — 항상 기록']
 
   created_at          datetime(6)  [not null, default: `now(6)`]
   updated_at          datetime(6)  [not null, default: `now(6)`]
 }
-
-
-// ── 소셜: 팔로우 ──────────────────────────────────────
-
-Table user_follow {
-  id                binary(16)  [pk]
-
-  follower_user_id  binary(16)  [
-    not null,
-    ref: > users.id,
-    note: '팔로우를 하는 회원'
-  ]
-
-  following_user_id binary(16)  [
-    not null,
-    ref: > users.id,
-    note: '팔로우 대상 회원'
-  ]
-
-  created_at        datetime(6) [not null, default: `now(6)`]
-  updated_at        datetime(6) [not null, default: `now(6)`]
-
-  indexes {
-    (follower_user_id, following_user_id) [unique, name: 'uk_user_follow']
-  }
-
-  Note: '''
-  follower_user_id = following_user_id 인 자기 자신 팔로우는 허용하지 않는다.
-  애플리케이션 비즈니스 규칙에서 검증한다.
-
-  동일한 두 회원 사이의 팔로우 관계는 하나만 존재할 수 있다.
-
-  친구 추천은 이 테이블의 팔로우 그래프와 user_profile 등의
-  정보를 이용하여 계산하며 별도 recommendation 테이블을 두지 않는다.
-  '''
-}
-
 
 // ── 소셜: 피드 ────────────────────────────────────────
 
@@ -421,7 +258,7 @@ Table feed {
   ]
 
   workout_id binary(16) [
-    ref: > workout.id,
+    ref: > workout_history.id,
     note: '공유한 완료 운동 기록. 일반 피드이면 NULL. 운동 기록 삭제 시 NULL 유지 권장'
   ]
 

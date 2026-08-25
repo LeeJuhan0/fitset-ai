@@ -172,7 +172,7 @@ def get_exercise(slug: str) -> dict:
         "name": row["name"],
         "primaryMuscles": [m["slug"] for m in muscles if m["role"] == "PRIMARY"],
         "secondaryMuscles": [m["slug"] for m in muscles if m["role"] == "SECONDARY"],
-        "equipment": row["equipment"],
+        "equipment": mysql.camel_kebab(row["equipment"]),  # 키 파일명이 kebab-case라 표기 변환 (#96)
         "difficulty": mysql.camel_enum(row["difficulty"]),
         "instructions": _instruction_steps(row["instructions"]),
         "thumbnailUrl": cdn_thumbnail_url(slug),

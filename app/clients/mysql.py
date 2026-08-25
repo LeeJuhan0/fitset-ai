@@ -14,10 +14,34 @@ from functools import lru_cache
 
 from sqlalchemy import URL, Select, create_engine
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import expression
 
 from app.core.config import get_settings
 from app.core.errors import DomainError
+
+
+class seconds_between(expression.FunctionElement):
+    """두 datetime 컬럼의 초 단위 차 — 방언별 컴파일 (MySQL TIMESTAMPDIFF, SQLite julianday)."""
+
+    name = "seconds_between"
+    inherit_cache = True
+
+
+@compiles(seconds_between)
+def _seconds_between_mysql(element, compiler, **kw):
+    start, end = list(element.clauses)
+    return f"TIMESTAMPDIFF(SECOND, {compiler.process(start, **kw)}, {compiler.process(end, **kw)})"
+
+
+@compiles(seconds_between, "sqlite")
+def _seconds_between_sqlite(element, compiler, **kw):
+    start, end = list(element.clauses)
+    return (
+        f"CAST(ROUND((julianday({compiler.process(end, **kw)}) - "
+        f"julianday({compiler.process(start, **kw)})) * 86400) AS INTEGER)"
+    )
 
 
 def is_configured() -> bool:
@@ -40,6 +64,14 @@ def camel_enum(value: str | None) -> str | None:
     if value is None:
         return None
     head, *rest = value.lower().split("_")
+    return head + "".join(word.capitalize() for word in rest)
+
+
+def camel_kebab(value: str | None) -> str | None:
+    """미디어 키의 kebab-case 표기를 팀 공통 camelCase로 바꾼다 (cable-machine → cableMachine)."""
+    if value is None:
+        return None
+    head, *rest = value.split("-")
     return head + "".join(word.capitalize() for word in rest)
 
 

@@ -29,11 +29,29 @@ from app.core.config import get_settings  # noqa: E402
 
 
 def fetch_backend_catalog(url: str, timeout: float) -> dict[str, dict]:
-    """백엔드 공개 API → slug 키 딕셔너리. 응답 봉투({traceId, data.items})를 벗긴다."""
+    """백엔드 공개 API → slug 키 딕셔너리. 응답 봉투({traceId, data.items})를 벗긴다.
+
+    2026-08-25 응답에서 slug 필드가 빠짐(백엔드 #96) — thumbnailUrl 파일명이 slug와
+    동일함을 확인해(thumbnails/{slug}.webp) 거기서 유도한다.
+    """
     response = httpx.get(url, timeout=timeout)
     response.raise_for_status()
     items = response.json()["data"]["items"]
-    return {item["slug"]: item for item in items if item.get("slug")}
+    catalog = {}
+    for item in items:
+        slug = item.get("slug") or _slug_from_url(item.get("thumbnailUrl"))
+        if slug:
+            catalog[slug] = item
+    return catalog
+
+
+def _slug_from_url(url: str | None) -> str | None:
+    """미디어 URL(…/thumbnails/{slug}.webp) → slug. 형식이 다르면 None."""
+    if not url:
+        return None
+    basename = url.rsplit("/", 1)[-1]
+    stem = basename.rsplit(".", 1)[0]
+    return stem or None
 
 
 def local_slugs(metadata_path: str) -> set[str]:

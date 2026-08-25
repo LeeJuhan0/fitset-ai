@@ -11,7 +11,7 @@ from app.clients import mysql
 from app.core import clock
 from app.core.errors import UserNotFoundError
 from app.exercises.domain import Muscle
-from app.users.domain import BodyWeightLog, UserAvoidedMuscle, UserProfile
+from app.users.domain import BodyWeightHistory, UserAvoidedMuscle, UserProfile
 
 
 def get_profile(user_id: str) -> dict:
@@ -19,7 +19,7 @@ def get_profile(user_id: str) -> dict:
     uid = mysql.uuid_bytes(user_id)
     rows = mysql.fetch_all(
         select(
-            UserProfile.height_cm,
+            UserProfile.height,
             UserProfile.gender,
             UserProfile.birth_date,
             UserProfile.workout_goal,
@@ -36,16 +36,16 @@ def get_profile(user_id: str) -> dict:
         .join(Muscle, Muscle.id == UserAvoidedMuscle.muscle_id)
         .where(UserAvoidedMuscle.user_id == uid)
     )
-    # 프로필 테이블에 체중이 없다 — 최신 몸무게는 body_weight_log 마지막 측정값 (구 §4.1 규약)
+    # 프로필 테이블에 체중이 없다 — 최신 몸무게는 body_weight_history 마지막 측정값 (구 §4.1 규약)
     latest_weight = mysql.fetch_all(
-        select(BodyWeightLog.weight_kg)
-        .where(BodyWeightLog.user_id == uid)
-        .order_by(BodyWeightLog.measured_at.desc())
+        select(BodyWeightHistory.weight)
+        .where(BodyWeightHistory.user_id == uid)
+        .order_by(BodyWeightHistory.measured_at.desc())
         .limit(1)
     )
     return {
-        "heightCm": float(profile["height_cm"]),
-        "weightKg": float(latest_weight[0]["weight_kg"]) if latest_weight else None,
+        "heightCm": float(profile["height"]),
+        "weightKg": float(latest_weight[0]["weight"]) if latest_weight else None,
         "gender": profile["gender"],
         "birthDate": profile["birth_date"].isoformat(),
         "goal": mysql.camel_enum(profile["workout_goal"]),
@@ -58,11 +58,11 @@ def get_body_weights(user_id: str, days: int) -> list[dict]:
     """체중 측정 이력 (구 §4.4) — measuredAt 오름차순. 챗봇 체중·BMI 차트용."""
     cutoff = (clock.now_utc() - timedelta(days=days)).replace(tzinfo=None)
     rows = mysql.fetch_all(
-        select(BodyWeightLog.measured_at, BodyWeightLog.weight_kg)
-        .where(BodyWeightLog.user_id == mysql.uuid_bytes(user_id), BodyWeightLog.measured_at >= cutoff)
-        .order_by(BodyWeightLog.measured_at)
+        select(BodyWeightHistory.measured_at, BodyWeightHistory.weight)
+        .where(BodyWeightHistory.user_id == mysql.uuid_bytes(user_id), BodyWeightHistory.measured_at >= cutoff)
+        .order_by(BodyWeightHistory.measured_at)
     )
     return [
-        {"measuredAt": mysql.iso_from_db(row["measured_at"]), "weightKg": float(row["weight_kg"])}
+        {"measuredAt": mysql.iso_from_db(row["measured_at"]), "weightKg": float(row["weight"])}
         for row in rows
     ]

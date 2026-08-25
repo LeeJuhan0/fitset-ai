@@ -63,7 +63,8 @@ def test_fetch_all_returns_column_named_dicts(backend_engine):
     from tests.conftest import seed, uid
 
     seed(backend_engine, [Exercise(
-        id=uid("e1"), slug="push-up", name="푸시업", equipment_id=uid("eq"),
+        id=uid("e1"), thumbnail_key="thumbnails/push-up.webp", video_key="videos/push-up.mp4",
+        name="푸시업", equipment_id=uid("eq"),
         difficulty="BEGINNER", exercise_type="REPS_ONLY", instructions=[],
     )])
     rows = mysql.fetch_all(select(Exercise.slug, Exercise.name))

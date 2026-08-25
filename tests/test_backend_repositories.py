@@ -16,9 +16,9 @@ from app.core.orm import BackendBase
 from app.exercises import repository as exercises_repository
 from app.exercises.domain import Equipment, Exercise, ExerciseMuscle, Muscle
 from app.users import repository as users_repository
-from app.users.domain import BodyWeightLog, UserAvoidedMuscle, UserProfile
+from app.users.domain import BodyWeightHistory, UserAvoidedMuscle, UserProfile
 from app.workouts import repository as workouts_repository
-from app.workouts.domain import Workout, WorkoutExercise, WorkoutSet
+from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 # DB 저장 형식과 동일한 naive UTC — repository의 _cutoff 비교 대상
@@ -40,11 +40,13 @@ def db(monkeypatch):
     with Session(engine) as session:
         user = mysql.uuid_bytes(USER_ID)
         session.add_all([
-            Equipment(id=_uid("eq"), slug="barbell", name="바벨"),
-            Muscle(id=_uid("chest"), slug="chest", name="가슴"),
-            Muscle(id=_uid("triceps"), slug="triceps", name="삼두근"),
+            # slug는 미디어 키 파일명에서 유도된다 (#96) — 시드도 실 DB 키 형태로 넣는다
+            Equipment(id=_uid("eq"), thumbnail_key="equipments/barbell.webp", name="바벨"),
+            Muscle(id=_uid("chest"), thumbnail_key="muscles/chest.webp", name="가슴"),
+            Muscle(id=_uid("triceps"), thumbnail_key="muscles/triceps.webp", name="삼두근"),
             Exercise(
-                id=_uid("bench"), slug="barbell-bench-press", name="바벨 벤치프레스",
+                id=_uid("bench"), thumbnail_key="thumbnails/barbell-bench-press.webp",
+                video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
                 equipment_id=_uid("eq"), difficulty="INTERMEDIATE",
                 exercise_type="WEIGHT_AND_REPS",
                 # 실 DB 형태 — {"content", "stepOrder"} dict 배열 (prod 실측 2026-08-12)
@@ -57,26 +59,27 @@ def db(monkeypatch):
             ExerciseMuscle(id=_uid("em2"), exercise_id=_uid("bench"), muscle_id=_uid("triceps"), role="SECONDARY"),
             UserProfile(
                 id=_uid("profile"), user_id=user, gender="MALE",
-                birth_date=datetime(1998, 4, 12).date(), height_cm=175.0,
+                birth_date=datetime(1998, 4, 12).date(), height=175.0,
                 workout_goal="WEIGHT_LOSS", level="INTERMEDIATE",
             ),
             UserAvoidedMuscle(id=_uid("avoid"), user_id=user, muscle_id=_uid("triceps")),
-            BodyWeightLog(id=_uid("bw1"), user_id=user, weight_kg=74.5, measured_at=NOW - timedelta(days=20)),
-            BodyWeightLog(id=_uid("bw2"), user_id=user, weight_kg=72.4, measured_at=NOW - timedelta(days=1)),
-            Workout(
+            BodyWeightHistory(id=_uid("bw1"), user_id=user, weight=74.5, measured_at=NOW - timedelta(days=20)),
+            BodyWeightHistory(id=_uid("bw2"), user_id=user, weight=72.4, measured_at=NOW - timedelta(days=1)),
+            WorkoutHistory(
+                # 순수 운동 시간 = 경과 3600 - 일시정지 420 = 3180초
                 id=_uid("w1"), user_id=user,
                 started_at=NOW - timedelta(days=2), ended_at=NOW - timedelta(days=2) + timedelta(hours=1),
-                active_duration_seconds=3180,
+                pause_seconds=420,
             ),
-            WorkoutExercise(id=_uid("we1"), workout_id=_uid("w1"), exercise_id=_uid("bench"), order_index=0),
-            WorkoutSet(
-                id=_uid("s1"), workout_exercise_id=_uid("we1"), order_index=0,
-                duration_seconds=32, rest_seconds=90, weight_kg=60, reps=10,
+            WorkoutHistoryExercise(id=_uid("we1"), workout_history_id=_uid("w1"), exercise_id=_uid("bench"), order_index=0),
+            WorkoutHistorySet(
+                id=_uid("s1"), workout_history_exercise_id=_uid("we1"), order_index=0,
+                duration_seconds=32, rest_seconds=90, weight=60, reps=10,
             ),
-            WorkoutSet(
+            WorkoutHistorySet(
                 # 0 = 미기록·맨몸·마지막 세트 — 와이어에서 null이 돼야 한다
-                id=_uid("s2"), workout_exercise_id=_uid("we1"), order_index=1,
-                duration_seconds=0, rest_seconds=0, weight_kg=0, reps=12,
+                id=_uid("s2"), workout_history_exercise_id=_uid("we1"), order_index=1,
+                duration_seconds=0, rest_seconds=0, weight=0, reps=12,
             ),
         ])
         session.commit()

@@ -10,7 +10,7 @@ import pytest
 from app.agent import tools
 from app.clients import mysql
 from app.exercises.domain import Equipment, Exercise
-from app.workouts.domain import Workout, WorkoutExercise, WorkoutSet
+from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -23,11 +23,13 @@ def workout_db(backend_engine, monkeypatch):
     monkeypatch.setattr(mysql, "is_configured", lambda: True)
     user = mysql.uuid_bytes(USER_ID)
     rows = [
-        Equipment(id=uid("eq"), slug="barbell", name="바벨"),
-        Exercise(id=uid("bench"), slug="barbell-bench-press", name="바벨 벤치프레스",
+        Equipment(id=uid("eq"), thumbnail_key="equipments/barbell.webp", name="바벨"),
+        Exercise(id=uid("bench"), thumbnail_key="thumbnails/barbell-bench-press.webp",
+                 video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
                  equipment_id=uid("eq"), difficulty="INTERMEDIATE",
                  exercise_type="WEIGHT_AND_REPS", instructions=[]),
-        Exercise(id=uid("squat"), slug="barbell-squat", name="바벨 스쿼트",
+        Exercise(id=uid("squat"), thumbnail_key="thumbnails/barbell-squat.webp",
+                 video_key="videos/barbell-squat.mp4", name="바벨 스쿼트",
                  equipment_id=uid("eq"), difficulty="INTERMEDIATE",
                  exercise_type="WEIGHT_AND_REPS", instructions=[]),
     ]
@@ -35,14 +37,14 @@ def workout_db(backend_engine, monkeypatch):
              ("s1", "squat", 2, [(80, 10)])]
     for name, slug, day, sets in plans:
         started = NOW - timedelta(days=day)
-        rows.append(Workout(id=uid(f"w{name}"), user_id=user, started_at=started,
-                            ended_at=started + timedelta(hours=1), active_duration_seconds=3000))
-        rows.append(WorkoutExercise(id=uid(f"we{name}"), workout_id=uid(f"w{name}"),
+        rows.append(WorkoutHistory(id=uid(f"w{name}"), user_id=user, started_at=started,
+                            ended_at=started + timedelta(hours=1), pause_seconds=600))
+        rows.append(WorkoutHistoryExercise(id=uid(f"we{name}"), workout_history_id=uid(f"w{name}"),
                                     exercise_id=uid(slug), order_index=0))
         for index, (kg, reps) in enumerate(sets):
-            rows.append(WorkoutSet(id=uid(f"s{name}{index}"), workout_exercise_id=uid(f"we{name}"),
+            rows.append(WorkoutHistorySet(id=uid(f"s{name}{index}"), workout_history_exercise_id=uid(f"we{name}"),
                                    order_index=index, duration_seconds=30, rest_seconds=60,
-                                   weight_kg=kg, reps=reps))
+                                   weight=kg, reps=reps))
     seed(backend_engine, rows)
     return backend_engine
 

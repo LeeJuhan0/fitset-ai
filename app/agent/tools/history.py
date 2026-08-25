@@ -21,7 +21,7 @@ from app.clients import mysql
 from app.core import clock
 from app.exercises import repository as exercise_catalog
 from app.exercises.domain import Exercise
-from app.workouts.domain import Workout, WorkoutExercise, WorkoutSet
+from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 
 logger = logging.getLogger("fitset")
 
@@ -35,27 +35,31 @@ def _since(days: int) -> datetime:
 
 
 def _user_sets(user_id: bytes, days: int) -> Select:
-    """세트 조회의 공통 골격 — 유저·기간으로 좁힌 workout→exercise→set 조인."""
+    """세트 조회의 공통 골격 — 유저·기간으로 좁힌 history→exercise→set 조인."""
     return (
         select()
-        .select_from(Workout)
-        .join(WorkoutExercise, WorkoutExercise.workout_id == Workout.id)
-        .join(Exercise, Exercise.id == WorkoutExercise.exercise_id)
-        .join(WorkoutSet, WorkoutSet.workout_exercise_id == WorkoutExercise.id)
-        .where(Workout.user_id == user_id, Workout.started_at >= _since(days))
+        .select_from(WorkoutHistory)
+        .join(WorkoutHistoryExercise, WorkoutHistoryExercise.workout_history_id == WorkoutHistory.id)
+        .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
+        .join(WorkoutHistorySet, WorkoutHistorySet.workout_history_exercise_id == WorkoutHistoryExercise.id)
+        .where(WorkoutHistory.user_id == user_id, WorkoutHistory.started_at >= _since(days))
     )
 
 
 def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
     """최근 N일 날짜별 세션 수·순수 운동 시간."""
-    workout_date = func.date(Workout.started_at).label("workout_date")
+    workout_date = func.date(WorkoutHistory.started_at).label("workout_date")
+    # 순수 운동 시간 = 전체 경과 - 일시정지 (#99 active_duration_seconds → pause_seconds)
+    active = mysql.seconds_between(
+        WorkoutHistory.started_at, WorkoutHistory.ended_at
+    ) - WorkoutHistory.pause_seconds
     return (
         select(
             workout_date,
-            func.count(func.distinct(Workout.id)).label("sessions"),
-            func.sum(Workout.active_duration_seconds).label("active_seconds"),
+            func.count(func.distinct(WorkoutHistory.id)).label("sessions"),
+            func.sum(active).label("active_seconds"),
         )
-        .where(Workout.user_id == user_id, Workout.started_at >= _since(days))
+        .where(WorkoutHistory.user_id == user_id, WorkoutHistory.started_at >= _since(days))
         .group_by(workout_date)
         .order_by(workout_date.desc())
         .limit(limit)
@@ -67,14 +71,14 @@ def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str | None) -> S
     return (
         _user_sets(user_id, days)
         .with_only_columns(
-            func.date(Workout.started_at).label("workout_date"),
-            WorkoutSet.order_index,
-            WorkoutSet.weight_kg,
-            WorkoutSet.reps,
-            WorkoutSet.duration_seconds,
+            func.date(WorkoutHistory.started_at).label("workout_date"),
+            WorkoutHistorySet.order_index,
+            WorkoutHistorySet.weight.label("weight_kg"),
+            WorkoutHistorySet.reps,
+            WorkoutHistorySet.duration_seconds,
         )
         .where(Exercise.slug == slug)
-        .order_by(Workout.started_at.desc(), WorkoutSet.order_index)
+        .order_by(WorkoutHistory.started_at.desc(), WorkoutHistorySet.order_index)
         .limit(limit)
     )
 
@@ -84,18 +88,18 @@ def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str | None) -> Sel
     return (
         _user_sets(user_id, days)
         .with_only_columns(
-            func.max(WorkoutSet.weight_kg).label("max_weight_kg"),
-            func.max(WorkoutSet.weight_kg * (1 + WorkoutSet.reps / 30)).label("best_e1rm_kg"),
-            func.max(WorkoutSet.reps).label("max_reps"),
+            func.max(WorkoutHistorySet.weight).label("max_weight_kg"),
+            func.max(WorkoutHistorySet.weight * (1 + WorkoutHistorySet.reps / 30)).label("best_e1rm_kg"),
+            func.max(WorkoutHistorySet.reps).label("max_reps"),
             func.count().label("total_sets"),
         )
-        .where(Exercise.slug == slug, WorkoutSet.weight_kg > 0)
+        .where(Exercise.slug == slug, WorkoutHistorySet.weight > 0)
     )
 
 
 def _volume_by_exercise(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
     """기간 내 종목별 총볼륨(무게×횟수) 상위."""
-    total_volume = func.sum(WorkoutSet.weight_kg * WorkoutSet.reps).label("total_volume_kg")
+    total_volume = func.sum(WorkoutHistorySet.weight * WorkoutHistorySet.reps).label("total_volume_kg")
     return (
         _user_sets(user_id, days)
         .with_only_columns(Exercise.slug, Exercise.name, total_volume, func.count().label("total_sets"))

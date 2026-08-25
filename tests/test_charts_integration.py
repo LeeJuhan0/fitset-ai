@@ -8,43 +8,44 @@ from datetime import datetime, timedelta, timezone
 from app.charts import service as charts_service
 from app.clients import mysql
 from app.exercises.domain import Equipment, Exercise
-from app.users.domain import BodyWeightLog, UserProfile
-from app.workouts.domain import Workout, WorkoutExercise, WorkoutSet
+from app.users.domain import BodyWeightHistory, UserProfile
+from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _weight(day_offset: int, kg: float) -> BodyWeightLog:
-    return BodyWeightLog(id=uid(f"bw{day_offset}"), user_id=mysql.uuid_bytes(USER_ID),
-                         weight_kg=kg, measured_at=NOW - timedelta(days=day_offset))
+def _weight(day_offset: int, kg: float) -> BodyWeightHistory:
+    return BodyWeightHistory(id=uid(f"bw{day_offset}"), user_id=mysql.uuid_bytes(USER_ID),
+                         weight=kg, measured_at=NOW - timedelta(days=day_offset))
 
 
 def _session(name: str, day_offset: int, sets: list[tuple[float, int]]) -> list:
     """벤치프레스 세션 1개 — (무게, 렙) 목록으로 세트를 만든다."""
     started = NOW - timedelta(days=day_offset)
     rows = [
-        Workout(id=uid(f"w{name}"), user_id=mysql.uuid_bytes(USER_ID), started_at=started,
-                ended_at=started + timedelta(hours=1), active_duration_seconds=3000 + day_offset),
-        WorkoutExercise(id=uid(f"we{name}"), workout_id=uid(f"w{name}"),
+        WorkoutHistory(id=uid(f"w{name}"), user_id=mysql.uuid_bytes(USER_ID), started_at=started,
+                ended_at=started + timedelta(hours=1), pause_seconds=600 - day_offset),
+        WorkoutHistoryExercise(id=uid(f"we{name}"), workout_history_id=uid(f"w{name}"),
                         exercise_id=uid("bench"), order_index=0),
     ]
     for index, (kg, reps) in enumerate(sets):
-        rows.append(WorkoutSet(id=uid(f"s{name}{index}"), workout_exercise_id=uid(f"we{name}"),
+        rows.append(WorkoutHistorySet(id=uid(f"s{name}{index}"), workout_history_exercise_id=uid(f"we{name}"),
                                order_index=index, duration_seconds=30, rest_seconds=60,
-                               weight_kg=kg, reps=reps))
+                               weight=kg, reps=reps))
     return rows
 
 
 def _seed_all(engine) -> None:
     seed(engine, [
         UserProfile(id=uid("p"), user_id=mysql.uuid_bytes(USER_ID), gender="MALE",
-                    birth_date=datetime(1995, 4, 12).date(), height_cm=175.0,
+                    birth_date=datetime(1995, 4, 12).date(), height=175.0,
                     workout_goal="HYPERTROPHY", level="INTERMEDIATE"),
-        Equipment(id=uid("eq"), slug="barbell", name="바벨"),
+        Equipment(id=uid("eq"), thumbnail_key="equipments/barbell.webp", name="바벨"),
         # slug는 실제 마스터에 있는 종목 — muscleVolume이 metadata의 주동근(chest)을 참조한다
-        Exercise(id=uid("bench"), slug="barbell-bench-press", name="바벨 벤치프레스",
+        Exercise(id=uid("bench"), thumbnail_key="thumbnails/barbell-bench-press.webp",
+                 video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
                  equipment_id=uid("eq"), difficulty="INTERMEDIATE",
                  exercise_type="WEIGHT_AND_REPS", instructions=[]),
         _weight(20, 74.5), _weight(10, 73.2), _weight(1, 72.4),
@@ -110,7 +111,7 @@ async def test_insufficient_data_degrades_to_none(backend_engine):
     # 체중 1점 — 추이 최소 점수(2) 미달이면 차트 대신 None (툴이 텍스트로 강등)
     seed(backend_engine, [
         UserProfile(id=uid("p"), user_id=mysql.uuid_bytes(USER_ID), gender="MALE",
-                    birth_date=datetime(1995, 4, 12).date(), height_cm=175.0,
+                    birth_date=datetime(1995, 4, 12).date(), height=175.0,
                     workout_goal="HYPERTROPHY", level="INTERMEDIATE"),
         _weight(1, 72.4),
     ])

@@ -10,7 +10,7 @@ from app.exercises.domain import Equipment, Exercise
 from app.users import repository as users_repository
 from app.users.domain import UserProfile
 from app.workouts import repository as workouts_repository
-from app.workouts.domain import Workout, WorkoutExercise, WorkoutSet
+from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -20,15 +20,16 @@ NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 def _profile() -> UserProfile:
     return UserProfile(
         id=uid("p"), user_id=mysql.uuid_bytes(USER_ID), gender="FEMALE",
-        birth_date=datetime(2000, 1, 1).date(), height_cm=162.0,
+        birth_date=datetime(2000, 1, 1).date(), height=162.0,
         workout_goal="ENDURANCE", level="BEGINNER",
     )
 
 
 def _bench() -> list:
     return [
-        Equipment(id=uid("eq"), slug="barbell", name="바벨"),
-        Exercise(id=uid("bench"), slug="barbell-bench-press", name="바벨 벤치프레스",
+        Equipment(id=uid("eq"), thumbnail_key="equipments/barbell.webp", name="바벨"),
+        Exercise(id=uid("bench"), thumbnail_key="thumbnails/barbell-bench-press.webp",
+                 video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
                  equipment_id=uid("eq"), difficulty="INTERMEDIATE",
                  exercise_type="WEIGHT_AND_REPS", instructions=[]),
     ]
@@ -44,11 +45,11 @@ def test_profile_without_weight_log_returns_null_weight(backend_engine):
 
 
 def test_body_weights_outside_window_are_excluded(backend_engine):
-    from app.users.domain import BodyWeightLog
+    from app.users.domain import BodyWeightHistory
 
-    seed(backend_engine, [_profile(), BodyWeightLog(
+    seed(backend_engine, [_profile(), BodyWeightHistory(
         id=uid("bw"), user_id=mysql.uuid_bytes(USER_ID),
-        weight_kg=70.0, measured_at=NOW - timedelta(days=40),
+        weight=70.0, measured_at=NOW - timedelta(days=40),
     )])
     assert users_repository.get_body_weights(USER_ID, days=30) == []
     # 프로필의 최신 체중은 기간 제한이 없다 — 40일 전 기록도 최신값으로 쓴다
@@ -64,10 +65,10 @@ def test_recent_workouts_empty_when_no_sessions(backend_engine):
 def test_recent_workouts_orders_sessions_latest_first(backend_engine):
     user = mysql.uuid_bytes(USER_ID)
     seed(backend_engine, [
-        Workout(id=uid("w-old"), user_id=user, started_at=NOW - timedelta(days=5),
-                ended_at=NOW - timedelta(days=5) + timedelta(hours=1), active_duration_seconds=1000),
-        Workout(id=uid("w-new"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW - timedelta(days=1) + timedelta(hours=1), active_duration_seconds=2000),
+        WorkoutHistory(id=uid("w-old"), user_id=user, started_at=NOW - timedelta(days=5),
+                ended_at=NOW - timedelta(days=5) + timedelta(hours=1), pause_seconds=0),
+        WorkoutHistory(id=uid("w-new"), user_id=user, started_at=NOW - timedelta(days=1),
+                ended_at=NOW - timedelta(days=1) + timedelta(hours=1), pause_seconds=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=7)
     assert [s["id"] for s in sessions] == [mysql.uuid_str(uid("w-new")), mysql.uuid_str(uid("w-old"))]
@@ -79,10 +80,10 @@ def test_recent_workouts_orders_sessions_latest_first(backend_engine):
 def test_recent_workouts_window_excludes_old_sessions(backend_engine):
     user = mysql.uuid_bytes(USER_ID)
     seed(backend_engine, [
-        Workout(id=uid("w-in"), user_id=user, started_at=NOW - timedelta(days=2),
-                ended_at=NOW - timedelta(days=2), active_duration_seconds=1),
-        Workout(id=uid("w-out"), user_id=user, started_at=NOW - timedelta(days=40),
-                ended_at=NOW - timedelta(days=40), active_duration_seconds=1),
+        WorkoutHistory(id=uid("w-in"), user_id=user, started_at=NOW - timedelta(days=2),
+                ended_at=NOW - timedelta(days=2), pause_seconds=0),
+        WorkoutHistory(id=uid("w-out"), user_id=user, started_at=NOW - timedelta(days=40),
+                ended_at=NOW - timedelta(days=40), pause_seconds=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=28)
     assert [s["id"] for s in sessions] == [mysql.uuid_str(uid("w-in"))]
@@ -93,9 +94,9 @@ def test_exercise_without_sets_keeps_empty_list(backend_engine):
     user = mysql.uuid_bytes(USER_ID)
     seed(backend_engine, [
         *_bench(),
-        Workout(id=uid("w"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW - timedelta(days=1), active_duration_seconds=600),
-        WorkoutExercise(id=uid("we"), workout_id=uid("w"), exercise_id=uid("bench"), order_index=0),
+        WorkoutHistory(id=uid("w"), user_id=user, started_at=NOW - timedelta(days=1),
+                ended_at=NOW - timedelta(days=1), pause_seconds=0),
+        WorkoutHistoryExercise(id=uid("we"), workout_history_id=uid("w"), exercise_id=uid("bench"), order_index=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=7)
     assert sessions[0]["exercises"][0]["slug"] == "barbell-bench-press"
@@ -107,16 +108,16 @@ def test_exercise_sets_filters_other_users_and_slugs(backend_engine):
     other = mysql.uuid_bytes("99999999-9999-9999-9999-999999999999")
     seed(backend_engine, [
         *_bench(),
-        Workout(id=uid("mine"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW, active_duration_seconds=1),
-        Workout(id=uid("theirs"), user_id=other, started_at=NOW - timedelta(days=1),
-                ended_at=NOW, active_duration_seconds=1),
-        WorkoutExercise(id=uid("we-mine"), workout_id=uid("mine"), exercise_id=uid("bench"), order_index=0),
-        WorkoutExercise(id=uid("we-theirs"), workout_id=uid("theirs"), exercise_id=uid("bench"), order_index=0),
-        WorkoutSet(id=uid("s-mine"), workout_exercise_id=uid("we-mine"), order_index=0,
-                   duration_seconds=30, rest_seconds=60, weight_kg=40, reps=10),
-        WorkoutSet(id=uid("s-theirs"), workout_exercise_id=uid("we-theirs"), order_index=0,
-                   duration_seconds=30, rest_seconds=60, weight_kg=100, reps=10),
+        WorkoutHistory(id=uid("mine"), user_id=user, started_at=NOW - timedelta(days=1),
+                ended_at=NOW, pause_seconds=0),
+        WorkoutHistory(id=uid("theirs"), user_id=other, started_at=NOW - timedelta(days=1),
+                ended_at=NOW, pause_seconds=0),
+        WorkoutHistoryExercise(id=uid("we-mine"), workout_history_id=uid("mine"), exercise_id=uid("bench"), order_index=0),
+        WorkoutHistoryExercise(id=uid("we-theirs"), workout_history_id=uid("theirs"), exercise_id=uid("bench"), order_index=0),
+        WorkoutHistorySet(id=uid("s-mine"), workout_history_exercise_id=uid("we-mine"), order_index=0,
+                   duration_seconds=30, rest_seconds=60, weight=40, reps=10),
+        WorkoutHistorySet(id=uid("s-theirs"), workout_history_exercise_id=uid("we-theirs"), order_index=0,
+                   duration_seconds=30, rest_seconds=60, weight=100, reps=10),
     ])
     rows = workouts_repository.get_exercise_sets(USER_ID, "barbell-bench-press", days=7)
     # 남의 세션 세트(100kg)는 절대 섞이면 안 된다
