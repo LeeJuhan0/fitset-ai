@@ -3,8 +3,8 @@
 운동 앱 FitSet의 AI 백엔드 — AI 채팅(스레드)과 루틴 생성·추천. FastAPI + LangGraph.
 
 인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 백엔드가 게시한 JWKS 공개키로 직접 검증한다.
-저장소는 **DynamoDB 온디맨드**(채팅·유저 요약·루틴, 2026-07-25 확정 — DocumentDB 미사용).
-루틴 파이프라인: S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본, PK=slug) → 부팅 시 Scan 인메모리 로드, 미스 시 GetItem 폴백. 룰 필터 검색은 항상 인메모리. **인메모리 스토어는 부팅 시점 스냅샷 — 배치가 routines를 갱신해도 재시작·재배포 전까지 반영되지 않는다**(무효화 메커니즘 없음, 2026-07-29 감사 F16).
+저장소는 **DynamoDB 온디맨드**(채팅·유저 요약·종목 카탈로그, 2026-07-25 확정). 루틴은 **RDS Postgres pgvector로 이관 중**(2026-08-28 결정, [`docs/루틴 저장소 pgvector.md`](docs/루틴%20저장소%20pgvector.md), 로드맵 [`docs/루틴 pgvector 이관 로드맵.md`](docs/루틴%20pgvector%20이관%20로드맵.md)) — 룰 필터와 코사인 상위 30을 Postgres 1쿼리로. 인메모리 루틴 스토어 부팅 로드는 2026-08-27 제거(PR #44), 이관 완료 전까지 루틴 생성은 503.
+배포는 **EKS + ArgoCD**(fitset-infra 레포). 이 레포의 CD는 ECR push까지만 하고, 반영은 fitset-infra `values-{env}.yaml`의 `image.tag` 갱신으로 한다 — [`docs/k8s 배포 가이드.md`](docs/k8s%20배포%20가이드.md).
 
 코드를 읽거나 수정하기 전에 반드시 참고할 것:
 

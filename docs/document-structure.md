@@ -112,7 +112,7 @@ Table exercise_catalog {
   Note: '''
   종목 카탈로그 — 백엔드 종목 마스터의 파생 캐시 (온디맨드, TTL 없음, 2026-08-05 신설)
   - 출처: 백엔드 공개 API GET /api/v1/exercises (무인증 200 실측) —
-    EventBridge Scheduler(03:00 KST, Asia/Seoul)가 ECS RunTask로 배치 실행
+    k8s CronJob(03:00 KST, 같은 이미지에 command만 교체)으로 배치 실행 예정, ECS 시절은 EventBridge Scheduler가 RunTask
     (scripts/sync_exercise_catalog.py — slug ∩ 로컬 metadata 206종 교집합만 적재)
   - 담는 것은 AI 서버가 자체 생성 못 하는 값뿐 — UUID·수행 방식·CDN URL.
     한글명·부위·장비는 repo 동봉 metadata가 정본이라 중복 저장하지 않는다

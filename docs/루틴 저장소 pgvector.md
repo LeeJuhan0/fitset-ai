@@ -1,0 +1,93 @@
+# 루틴 저장소 pgvector
+
+루틴 검색 저장소를 DynamoDB와 인메모리 numpy에서 RDS Postgres(pgvector)로 옮기는 설계다. 이관 순서는 [루틴 pgvector 이관 로드맵](루틴%20pgvector%20이관%20로드맵.md), DDL은 `scripts/sql/routines_pgvector.sql`, 적재는 `scripts/load_routines_postgres.py`다.
+
+## 1. 왜 옮기나
+
+| 문제 | 인메모리 구조 | pgvector |
+|---|---|---|
+| 부팅 | DynamoDB 전량 Scan 수십 초, startupProbe와 충돌 | 즉시 |
+| 메모리 | 파드마다 임베딩 행렬 100MB 상주, 레플리카 수만큼 배수 | 수백 MB 이하 |
+| 갱신 | 배치 후 재배포 전까지 미반영 | 적재 즉시 반영 |
+| 검색 지연 | 24ms | 수십 ms |
+
+검색 지연은 오히려 조금 늘지만 요청 전체 3.6초의 1~2%라 의미가 없다. 실측 근거는 [쿼리 변환 LLM AB 실험](쿼리%20변환%20LLM%20AB%20실험.md)이다.
+
+## 2. 왜 pgvector인가
+
+| 선택지 | 벡터 검색과 필터 | 월 비용 | 탈락 이유 |
+|---|---|---|---|
+| RDS Postgres pgvector | 한 쿼리 | 약 15달러 | 채택 |
+| MongoDB Atlas Vector Search | 한 쿼리 | 약 60달러 | AWS 밖, 피어링 필요, 배열 포함 필터가 어색 |
+| 자체 설치 MongoDB | 없음, mongot 프리뷰 | 노드 비용 | 벡터 인덱스 없음, PVC 필요 |
+| OpenSearch | 한 쿼리 | 30~700달러 | 운영 무게 |
+| DynamoDB GSI | 불가 | 0 | 파티션키 등호 1개, 리스트 포함 검색 없음 |
+
+룰 필터 5개(부위 교집합, 기피, 수준 상한, 시간 범위, 홈트 장비)가 WHERE 절로 그대로 표현되는 것이 결정 요인이다.
+
+## 3. 스키마
+
+검색은 `routines` 한 테이블로 끝난다. 정규화 테이블 둘은 분석용이며 요청 경로에서 조인하지 않는다.
+
+| 테이블 | 역할 | 주요 컬럼 |
+|---|---|---|
+| `routines` | 검색과 응답 본문 | `slug` UNIQUE, `level` smallint, `minutes`, `muscle_groups` text[], `equipment` text[], `bodyweight_only`, `exercise_names` text[], `body` jsonb, `embedding` vector(1024) |
+| `routine_exercises` | 종목별 역조회 | `(routine_id, order_index)` PK, `exercise_slug` |
+| `routine_sets` | 세트 집계 | `(routine_id, order_index, set_index)` PK, `reps`, `weight` |
+
+`body`는 지금 `RoutineStore.get_full`이 돌려주던 dict 그대로라 presenter가 그대로 쓴다. `exercise_slug`는 백엔드 `exercise.thumbnail_key`에서 유도한 값이고 다른 DB라 FK는 없다.
+
+## 4. 인덱스
+
+| 인덱스 | 정의 | 이유 |
+|---|---|---|
+| `routines_muscle_gin` | GIN (muscle_groups) | `&&` 교집합과 기피, 선택도가 가장 높다 |
+| `routines_level_minutes` | BTREE (level, minutes) | 수준 상한과 시간 범위, GIN 비트맵과 AND |
+| `routines_bodyweight` | BTREE (level, minutes) WHERE bodyweight_only | 홈트 요청만 타는 부분 인덱스 |
+| `routine_exercises_slug` | BTREE (exercise_slug) | 종목 역조회 |
+
+벡터 인덱스는 두지 않는다. 25k건은 필터 후 남는 수백에서 2만 건에 대해 exact 정렬을 해도 수십 ms이고, HNSW는 필터 통과 행이 `ef_search`보다 적으면 30건을 못 채운다. 10만 건을 넘기면 HNSW와 `hnsw.iterative_scan = relaxed_order`를 함께 켠다.
+
+## 5. 검색 쿼리
+
+```sql
+SELECT slug, exercise_names, body
+FROM routines
+WHERE muscle_groups && %(muscles)s
+  AND NOT (muscle_groups && %(avoided)s)
+  AND level <= %(level)s
+  AND (minutes IS NULL OR minutes BETWEEN %(lo)s AND %(hi)s)
+  AND (%(home_only)s = false OR bodyweight_only)
+ORDER BY embedding <=> %(qvec)s
+LIMIT 30;
+```
+
+로컬 pgvector 컨테이너에 600건을 넣고 EXPLAIN ANALYZE한 결과, `(level, minutes)` 비트맵 인덱스 두 개가 OR로 결합되고 배열 조건이 필터로 걸린 뒤 정렬까지 1ms였다. 기피 부위만으로 후보가 비면 `avoided`를 빈 배열로 한 번 더 부른다.
+
+## 6. 적재
+
+```
+DynamoDB routines (변환 완료본, 임베딩 포함)
+  → scripts/load_routines_postgres.py  (Scan, slug upsert, 500건 트랜잭션)
+  → routines, routine_exercises, routine_sets
+```
+
+Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안쪽이다. 몇 번을 돌려도 결과가 같다. 이관이 끝나면 원천(S3 캐글) 변환 배치가 DynamoDB 대신 Postgres에 바로 쓰도록 바꾼다.
+
+## 7. RDS 인스턴스
+
+| 항목 | 값 |
+|---|---|
+| 엔진 | PostgreSQL 17, pgvector 확장은 `CREATE EXTENSION vector` |
+| 인스턴스 | db.t4g.micro, gp3 20GB |
+| 배치 | fitset-infra `terraform/rds.tf`, stage data 서브넷, SG 5432는 app-stage CIDR만 |
+| 자격 | SSM `/fitset/stage/pg/host`, `/fitset/stage/pg/password`, ExternalSecret으로 주입 |
+| 앱 연결 | psycopg3 풀 min 1 max 5, READ ONLY, statement_timeout 2초 |
+
+크기는 임베딩 105MB에 본문 30MB, 정규화 35MB다. shared_buffers 256MB에 검색 테이블이 다 들어가진 않지만 필터 후 접근하는 행만 읽으므로 문제 없다.
+
+## 8. 바꾸지 않는 것
+
+1. 요청당 Bedrock 쿼리 임베딩 1회와 LLM 선택 1회.
+2. 채팅, 유저 요약, 종목 카탈로그의 DynamoDB 테이블.
+3. 백엔드 MySQL 직조회(NL2SQL)와 그 엔티티.
