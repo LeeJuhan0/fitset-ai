@@ -66,19 +66,19 @@ def db(monkeypatch):
             BodyWeightHistory(id=_uid("bw1"), user_id=user, weight=74.5, measured_at=NOW - timedelta(days=20)),
             BodyWeightHistory(id=_uid("bw2"), user_id=user, weight=72.4, measured_at=NOW - timedelta(days=1)),
             WorkoutHistory(
-                # 순수 운동 시간 = 경과 3600 - 일시정지 420 = 3180초
+                # 활동 시간은 active_duration 컬럼에 직접 저장된다 (경과 3600 중 3180초)
                 id=_uid("w1"), user_id=user,
                 started_at=NOW - timedelta(days=2), ended_at=NOW - timedelta(days=2) + timedelta(hours=1),
-                pause_seconds=420,
+                active_duration_seconds=3180,
             ),
             WorkoutHistoryExercise(id=_uid("we1"), workout_history_id=_uid("w1"), exercise_id=_uid("bench"), order_index=0),
             WorkoutHistorySet(
-                id=_uid("s1"), workout_history_exercise_id=_uid("we1"), order_index=0,
+                id=_uid("s1"), workout_exercise_history_id=_uid("we1"), order_index=0,
                 duration_seconds=32, rest_seconds=90, weight=60, reps=10,
             ),
             WorkoutHistorySet(
                 # 0 = 미기록·맨몸·마지막 세트 — 와이어에서 null이 돼야 한다
-                id=_uid("s2"), workout_history_exercise_id=_uid("we1"), order_index=1,
+                id=_uid("s2"), workout_exercise_history_id=_uid("we1"), order_index=1,
                 duration_seconds=0, rest_seconds=0, weight=0, reps=12,
             ),
         ])

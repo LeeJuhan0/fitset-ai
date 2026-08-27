@@ -66,9 +66,9 @@ def test_recent_workouts_orders_sessions_latest_first(backend_engine):
     user = mysql.uuid_bytes(USER_ID)
     seed(backend_engine, [
         WorkoutHistory(id=uid("w-old"), user_id=user, started_at=NOW - timedelta(days=5),
-                ended_at=NOW - timedelta(days=5) + timedelta(hours=1), pause_seconds=0),
+                ended_at=NOW - timedelta(days=5) + timedelta(hours=1), active_duration_seconds=0),
         WorkoutHistory(id=uid("w-new"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW - timedelta(days=1) + timedelta(hours=1), pause_seconds=0),
+                ended_at=NOW - timedelta(days=1) + timedelta(hours=1), active_duration_seconds=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=7)
     assert [s["id"] for s in sessions] == [mysql.uuid_str(uid("w-new")), mysql.uuid_str(uid("w-old"))]
@@ -81,9 +81,9 @@ def test_recent_workouts_window_excludes_old_sessions(backend_engine):
     user = mysql.uuid_bytes(USER_ID)
     seed(backend_engine, [
         WorkoutHistory(id=uid("w-in"), user_id=user, started_at=NOW - timedelta(days=2),
-                ended_at=NOW - timedelta(days=2), pause_seconds=0),
+                ended_at=NOW - timedelta(days=2), active_duration_seconds=0),
         WorkoutHistory(id=uid("w-out"), user_id=user, started_at=NOW - timedelta(days=40),
-                ended_at=NOW - timedelta(days=40), pause_seconds=0),
+                ended_at=NOW - timedelta(days=40), active_duration_seconds=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=28)
     assert [s["id"] for s in sessions] == [mysql.uuid_str(uid("w-in"))]
@@ -95,7 +95,7 @@ def test_exercise_without_sets_keeps_empty_list(backend_engine):
     seed(backend_engine, [
         *_bench(),
         WorkoutHistory(id=uid("w"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW - timedelta(days=1), pause_seconds=0),
+                ended_at=NOW - timedelta(days=1), active_duration_seconds=0),
         WorkoutHistoryExercise(id=uid("we"), workout_history_id=uid("w"), exercise_id=uid("bench"), order_index=0),
     ])
     sessions = workouts_repository.get_recent_workouts(USER_ID, days=7)
@@ -109,14 +109,14 @@ def test_exercise_sets_filters_other_users_and_slugs(backend_engine):
     seed(backend_engine, [
         *_bench(),
         WorkoutHistory(id=uid("mine"), user_id=user, started_at=NOW - timedelta(days=1),
-                ended_at=NOW, pause_seconds=0),
+                ended_at=NOW, active_duration_seconds=0),
         WorkoutHistory(id=uid("theirs"), user_id=other, started_at=NOW - timedelta(days=1),
-                ended_at=NOW, pause_seconds=0),
+                ended_at=NOW, active_duration_seconds=0),
         WorkoutHistoryExercise(id=uid("we-mine"), workout_history_id=uid("mine"), exercise_id=uid("bench"), order_index=0),
         WorkoutHistoryExercise(id=uid("we-theirs"), workout_history_id=uid("theirs"), exercise_id=uid("bench"), order_index=0),
-        WorkoutHistorySet(id=uid("s-mine"), workout_history_exercise_id=uid("we-mine"), order_index=0,
+        WorkoutHistorySet(id=uid("s-mine"), workout_exercise_history_id=uid("we-mine"), order_index=0,
                    duration_seconds=30, rest_seconds=60, weight=40, reps=10),
-        WorkoutHistorySet(id=uid("s-theirs"), workout_history_exercise_id=uid("we-theirs"), order_index=0,
+        WorkoutHistorySet(id=uid("s-theirs"), workout_exercise_history_id=uid("we-theirs"), order_index=0,
                    duration_seconds=30, rest_seconds=60, weight=100, reps=10),
     ])
     rows = workouts_repository.get_exercise_sets(USER_ID, "barbell-bench-press", days=7)

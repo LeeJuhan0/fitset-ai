@@ -26,12 +26,12 @@ def _session(name: str, day_offset: int, sets: list[tuple[float, int]]) -> list:
     started = NOW - timedelta(days=day_offset)
     rows = [
         WorkoutHistory(id=uid(f"w{name}"), user_id=mysql.uuid_bytes(USER_ID), started_at=started,
-                ended_at=started + timedelta(hours=1), pause_seconds=600 - day_offset),
+                ended_at=started + timedelta(hours=1), active_duration_seconds=3000 + day_offset),
         WorkoutHistoryExercise(id=uid(f"we{name}"), workout_history_id=uid(f"w{name}"),
                         exercise_id=uid("bench"), order_index=0),
     ]
     for index, (kg, reps) in enumerate(sets):
-        rows.append(WorkoutHistorySet(id=uid(f"s{name}{index}"), workout_history_exercise_id=uid(f"we{name}"),
+        rows.append(WorkoutHistorySet(id=uid(f"s{name}{index}"), workout_exercise_history_id=uid(f"we{name}"),
                                order_index=index, duration_seconds=30, rest_seconds=60,
                                weight=kg, reps=reps))
     return rows

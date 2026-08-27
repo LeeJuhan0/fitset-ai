@@ -56,7 +56,7 @@ def get_recent_workouts(user_id: str, days: int) -> list[dict]:
         .select_from(WorkoutHistoryExercise)
         .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
         # 세트 없는 운동도 exercises 목록에는 나와야 한다 — outer join 후 세트 행만 걸러 담는다
-        .join(WorkoutHistorySet, WorkoutHistorySet.workout_history_exercise_id == WorkoutHistoryExercise.id, isouter=True)
+        .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id, isouter=True)
         .where(WorkoutHistoryExercise.workout_history_id.in_([row["id"] for row in sessions]))
         .order_by(WorkoutHistoryExercise.order_index, WorkoutHistorySet.order_index)
     )
@@ -113,7 +113,7 @@ def get_exercise_sets(user_id: str, slug: str, days: int) -> list[dict]:
         .select_from(WorkoutHistory)
         .join(WorkoutHistoryExercise, WorkoutHistoryExercise.workout_history_id == WorkoutHistory.id)
         .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
-        .join(WorkoutHistorySet, WorkoutHistorySet.workout_history_exercise_id == WorkoutHistoryExercise.id)
+        .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id)
         .where(
             WorkoutHistory.user_id == mysql.uuid_bytes(user_id),
             Exercise.slug == slug,
@@ -138,7 +138,7 @@ def get_exercise_sets(user_id: str, slug: str, days: int) -> list[dict]:
 def get_workout_sessions(user_id: str, days: int) -> list[dict]:
     """세션 요약 목록 (구 §4.6) — 종목·세트 없이 세션 메타만. 시간·빈도 차트용."""
     rows = mysql.fetch_all(
-        select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at, WorkoutHistory.pause_seconds)
+        select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at, WorkoutHistory.active_duration_seconds)
         .where(WorkoutHistory.user_id == mysql.uuid_bytes(user_id), WorkoutHistory.started_at >= _cutoff(days))
         .order_by(WorkoutHistory.started_at)
     )
@@ -147,14 +147,9 @@ def get_workout_sessions(user_id: str, days: int) -> list[dict]:
             "id": mysql.uuid_str(row["id"]),
             "startedAt": mysql.iso_from_db(row["started_at"]),
             "endedAt": mysql.iso_from_db(row["ended_at"]),
-            # 순수 운동 시간 = 전체 경과 - 일시정지 (#99에서 pause_seconds로 대체됨)
-            "activeDurationSeconds": _active_seconds(row["started_at"], row["ended_at"], row["pause_seconds"]),
+            # 실제 DB는 활동 시간을 active_duration 컬럼에 직접 저장한다 (2026-08-28 실스키마 확인)
+            "activeDurationSeconds": row["active_duration_seconds"] or 0,
         }
         for row in rows
     ]
 
-
-def _active_seconds(started_at: datetime, ended_at: datetime, pause_seconds: int) -> int:
-    """세션 순수 운동 시간(초) — 음수 방어 포함."""
-    elapsed = int((ended_at - started_at).total_seconds())
-    return max(0, elapsed - (pause_seconds or 0))

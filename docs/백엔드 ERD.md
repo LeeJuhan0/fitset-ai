@@ -1,5 +1,7 @@
 # 백엔드(Spring) DB ERD — 참조 문서
 
+> **2026-08-28 실제 RDS 대조 결과, 아래 DBML(공유본)은 실제 적용 스키마와 다르다.** 코드 엔티티는 실제 DB 기준으로 정정했다. 차이는 문서 끝 「실제 RDS 스키마 대조」 절 참조.
+
 > 2026-08-25 백엔드 리팩토링(#92·#93·#95·#96·#98·#99) 공유본(fitset_app_01_04)으로 본문 교체 완료, AI 서버 엔티티도 반영 완료. 요지: 단위 접미사 제거(height_cm→height 등), body_weight_log→body_weight_history·routine\*→workout_template\*·workout\*→workout_history\* 개명, active_duration_seconds→pause_seconds(순수 운동 시간은 경과-일시정지로 유도), slug 컬럼 삭제(thumbnail_key 자연키 대체 — AI 서버는 키 파일명에서 slug를 계산 컬럼으로 유도).
 
 백엔드 스프링 서버가 보유한 MySQL ERD (2026-08-25 백엔드 공유본 — 구현 스키마 `schema.sql` + JPA 엔티티 기준).
@@ -489,3 +491,24 @@ Table feed_comment_like {
 | 15 | `exercise.instructions` json | ✅ 존재 유지 — 운동 가이드(exerciseGif) 수행 방법 출처. 내부 API §4.3 노출 협의(⑪)는 계속 유효 |
 | 16 | 소셜 계층 신설 | 참고 — 현 AI 서버 범위(챗봇·루틴 추천)와 무관. 추후 피드 추천 과제 착수 시 `user_follow`·`feed` 조회용 내부 API 신설 협의 필요 (친구 추천은 백엔드 조회 로직 담당으로 명시됨) |
 | 17 | `users.deleted_at` 제거 | 참고 — 탈퇴 표현이 소프트 삭제에서 다른 방식(하드 삭제 추정)으로 변경. AI 서버는 탈퇴 유저의 DynamoDB 데이터(스레드·요약) 정리 트리거가 없다는 기존 상태 그대로 — 탈퇴 이벤트 연동은 미해결 과제 |
+
+## 실제 RDS 스키마 대조 (2026-08-28, hangang-rds `fitset`, `information_schema` 직접 조회)
+
+`fitset_readonly` 계정으로 `information_schema.columns`·`key_column_usage`·`statistics`를 읽어 위 공유본 DBML과 비교했다. 운영 로그(ECS `/ecs/fitset-ai-server`)에 `Unknown column 'workout_history.pause_seconds'` 오류가 남아 있던 원인이 이 불일치다.
+
+| # | 공유본(위 DBML) | 실제 DB | 코드 대응 |
+|---|---|---|---|
+| 1 | `workout_history.pause_seconds` | `workout_history.active_duration` int | 엔티티 속성 `active_duration_seconds`로 컬럼 매핑, 순수 운동 시간을 경과에서 빼서 계산하던 로직 제거 |
+| 2 | `workout_history_exercise` | `workout_exercise_history` | `__tablename__` 정정 |
+| 3 | `workout_history_set` (`workout_history_exercise_id`, `duration_seconds`, `rest_seconds`) | `workout_exercise_set_history` (`workout_exercise_history_id`, `duration`, `rest`) | 테이블명·FK 속성명 정정, `duration_seconds`·`rest_seconds` 속성은 유지하고 컬럼명만 매핑 |
+| 4 | `workout_template_exercise`, `workout_template_set` (`target_duration_seconds`) | `workout_exercise_template`, `workout_exercise_set_template` (`target_duration`) | 미사용, 문서만 |
+| 5 | `users` | `social_user` (FK 전부 `social_user.id`) | 미사용, 문서만 |
+| 6 | 소셜 5테이블 `user_follow`·`feed*` | 없음 | 미구현 |
+
+일치: `user_profile`(`height`), `user_avoided_muscle`, `body_weight_history`(`weight`), `exercise`·`equipment`·`muscle`(`thumbnail_key`, slug 컬럼 없음), `exercise_muscle`, enum 값과 `datetime(6)` 규약.
+
+실제 행수: `workout_history` 9,853, `workout_exercise_history` 49,875, `workout_exercise_set_history` 149,389, `user_profile` 503, `exercise` 206.
+
+`active_duration`의 의미는 컬럼명대로 활동 시간(초)으로 가정했다. 백엔드가 일시정지 시간을 저장하는 것이라면 엔티티 매핑만 되돌리면 된다. 공유본과 실제 적용본 중 어느 쪽이 정본인지, `active_duration` 정의는 백엔드 확인이 필요하다.
+
+인덱스는 FK 인덱스와 unique(`uk_exercise_muscle` 3컬럼, `uk_social_user_provider_identity`, `uk_user_profile_user`, `uk_refresh_token_user`)뿐이고 `workout_history(user_id, started_at)` 복합 인덱스는 없다. 기록 조회가 `user_id` 단일 인덱스 후 `started_at` 필터라 데이터가 늘면 백엔드에 복합 인덱스를 요청한다.

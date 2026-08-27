@@ -41,7 +41,7 @@ def _user_sets(user_id: bytes, days: int) -> Select:
         .select_from(WorkoutHistory)
         .join(WorkoutHistoryExercise, WorkoutHistoryExercise.workout_history_id == WorkoutHistory.id)
         .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
-        .join(WorkoutHistorySet, WorkoutHistorySet.workout_history_exercise_id == WorkoutHistoryExercise.id)
+        .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id)
         .where(WorkoutHistory.user_id == user_id, WorkoutHistory.started_at >= _since(days))
     )
 
@@ -49,10 +49,8 @@ def _user_sets(user_id: bytes, days: int) -> Select:
 def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
     """최근 N일 날짜별 세션 수·순수 운동 시간."""
     workout_date = func.date(WorkoutHistory.started_at).label("workout_date")
-    # 순수 운동 시간 = 전체 경과 - 일시정지 (#99 active_duration_seconds → pause_seconds)
-    active = mysql.seconds_between(
-        WorkoutHistory.started_at, WorkoutHistory.ended_at
-    ) - WorkoutHistory.pause_seconds
+    # 실제 DB 는 활동 시간을 active_duration 컬럼에 직접 저장한다 (2026-08-28 실스키마 확인)
+    active = WorkoutHistory.active_duration_seconds
     return (
         select(
             workout_date,
