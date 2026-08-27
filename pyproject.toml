@@ -14,7 +14,6 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-core>=0.3",
     "langchain-aws>=0.2",
-    "prometheus-fastapi-instrumentator>=7.0",
     "pymysql>=1.2.0",
     "sqlalchemy>=2.0.52",
 ]

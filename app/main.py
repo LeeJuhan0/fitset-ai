@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.chat import router as chat_router
 from app.core.config import get_settings
@@ -29,26 +28,26 @@ logger = logging.getLogger("fitset")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """부팅 시 기본 executor를 명시 크기로 교체하고 루틴 스토어를 백그라운드로 로드한다."""
+    """부팅 시 기본 executor를 명시 크기로 교체하고 종목 마스터·카탈로그를 선로딩한다.
+
+    루틴 스토어 전량 로드는 제외 — pgvector 검색 전환(RDS routine_index) 전까지 루틴 생성은
+    503(AiUnavailableError)으로 응답한다. 인메모리 임베딩 행렬이 없으니 파드 메모리도 그만큼 준다.
+    """
     executor = ThreadPoolExecutor(
         max_workers=get_settings().executor_max_workers, thread_name_prefix="blocking-io"
     )
     asyncio.get_running_loop().set_default_executor(executor)
 
-    store = get_routine_store()
-
-    async def load_store() -> None:
+    async def preload() -> None:
         try:
-            await asyncio.to_thread(store.load)
             # 종목 마스터(1.2MB JSON)·카탈로그(DynamoDB Scan) 선로딩 —
             # 첫 요청이 파싱·I/O로 이벤트 루프를 막지 않게
             await asyncio.to_thread(get_exercise_meta)
             await asyncio.to_thread(get_exercise_catalog)
-            logger.info("routine store loaded: %d routines", len(store.routines))
         except Exception:
-            logger.exception("routine store load failed")
+            logger.exception("preload failed")
 
-    load_task = asyncio.create_task(load_store())
+    load_task = asyncio.create_task(preload())
     yield
     load_task.cancel()
     executor.shutdown(wait=False, cancel_futures=True)
@@ -140,17 +139,11 @@ def _level_for(status: int) -> int:
 @app.get("/health", include_in_schema=False)
 @app.get("/ai/v1/health", include_in_schema=False)
 async def health() -> JSONResponse:
-    """루틴 스토어 로드 완료 여부로 헬스체크에 응답한다."""
-    store = get_routine_store()
-    if not store.ready:
-        return JSONResponse(status_code=503, content={"status": "loading"})
-    return JSONResponse(content={"status": "ok", "routines": len(store.routines)})
+    """프로세스 생존 여부로 응답한다. 루틴 스토어는 로드하지 않으므로 ready 여부를 보지 않는다."""
+    return JSONResponse(content={"status": "ok", "routines": len(get_routine_store().routines)})
 
 
 app.include_router(routines_router.router)
 app.include_router(chat_router.router)
 app.include_router(exercises_router.router)
 
-# 메트릭 노출(/metrics) — Alloy 사이드카가 localhost로 60초마다 수집해 Grafana Cloud로 보낸다.
-# ALB는 /ai/* 만 이 서버로 라우팅하므로 /metrics 는 인터넷에 나가지 않는다(백엔드 /actuator 와 동일 원리).
-Instrumentator(excluded_handlers=["/metrics"]).instrument(app).expose(app, include_in_schema=False)
