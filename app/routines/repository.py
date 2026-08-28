@@ -1,15 +1,63 @@
-"""루틴 저장소 — 부팅 시 DynamoDB `routines` Scan → 라이트 인메모리 로드(임베딩 포함).
+"""루틴 저장소 — Postgres(pgvector) `routines` 검색과, 이관 전까지 남겨둔 DynamoDB 인메모리 스토어.
 
-메모리에는 룰 필터·LLM 프롬프트에 필요한 필드(부위·수준·시간·장비·종목명 요약)와
-정규화 임베딩 행렬만 유지한다(~350MB). 세트 상세가 담긴 전체 루틴은 최종 선택된
-1건만 GetItem으로 가져온다 — 다중 조건 필터를 DynamoDB 쿼리로 하지 않는다.
+search() 가 룰 필터 5개와 코사인 상위 K 를 쿼리 1건으로 처리한다(docs/루틴 저장소 pgvector.md).
+반환 행의 body 는 종전 get_full 이 돌려주던 전체 루틴 dict 라 presenter 가 그대로 쓴다.
+RoutineStore 는 4단계(서비스 전환)에서 제거한다.
 """
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
 
+from app.clients import postgres
 from app.core.config import get_settings
 from app.core.dynamo import get_routines_table, to_plain
+from app.routines.domain import LEVEL_ORDER
+
+# 룰 필터 5개가 WHERE 절 5줄로 1:1 대응된다. 기피는 빈 배열이면 항상 참이라 재시도 분기가 없다.
+SEARCH_SQL = """
+SELECT slug, exercise_names, body
+FROM routines
+WHERE muscle_groups && %(muscles)s
+  AND NOT (muscle_groups && %(avoided)s)
+  AND level <= %(level)s
+  AND (minutes IS NULL OR minutes BETWEEN %(lo)s AND %(hi)s)
+  AND (%(home_only)s = false OR bodyweight_only)
+ORDER BY embedding <=> %(query)s
+LIMIT %(limit)s
+"""
+
+
+@dataclass(frozen=True)
+class SearchFilters:
+    """룰 필터 입력 — service 가 요청·프로필·기록에서 조립한다."""
+
+    muscle_groups: list[str]
+    avoided: set[str]
+    level: str
+    minutes: int
+    tolerance: float
+    home_only: bool
+
+    def bind(self) -> dict:
+        """WHERE 절 바인딩 값. 시간 범위는 ±tolerance 를 정수 분으로 닫는다."""
+        span = int(self.minutes * self.tolerance)
+        return {
+            "muscles": list(self.muscle_groups),
+            "avoided": sorted(self.avoided),
+            "level": LEVEL_ORDER[self.level],
+            "lo": self.minutes - span,
+            "hi": self.minutes + span,
+            "home_only": self.home_only,
+        }
+
+
+def search(filters: SearchFilters, query_vector, limit: int) -> list[dict]:
+    """룰 필터 통과 루틴을 쿼리 벡터와의 코사인 순으로 상위 limit 건. 동기 — 스레드에서 호출."""
+    params = filters.bind()
+    params["query"] = np.asarray(query_vector, dtype=np.float32)
+    params["limit"] = limit
+    return postgres.fetch_all(SEARCH_SQL, params)
 
 
 def _parse_embedding(raw, dimension: int) -> np.ndarray | None:
