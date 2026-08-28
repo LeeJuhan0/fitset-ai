@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # host 미설정이면 루틴 생성이 503 으로 물러난다 (로컬 기본). 비밀번호는 ExternalSecret 이 주입
     pg_host: str | None = None
     pg_port: int = 5432
-    pg_user: str = "admin"
+    pg_user: str = "fitset"   # RDS Postgres 는 admin 이 예약어라 마스터 유저명이 fitset 이다
     pg_password: str = ""
     pg_database: str = "fitset"
     pg_connect_timeout: int = 2
