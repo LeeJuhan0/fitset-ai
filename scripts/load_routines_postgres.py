@@ -1,19 +1,29 @@
-"""DynamoDB `routines` → Postgres(pgvector) `routines` 적재 배치.
+"""DynamoDB `routines` 또는 S3 스냅샷 → Postgres(pgvector) `routines` 적재 배치.
 
-DynamoDB 에 이미 변환·임베딩된 항목을 그대로 옮긴다. 원천(S3 캐글)에서 다시 변환하거나
-Bedrock 을 다시 부르지 않으므로 비용이 없고, 인메모리 스토어가 부팅 때 하던 Scan 과 같은 입력을 쓴다.
-slug 기준 upsert 라 몇 번을 재실행해도 같은 결과다. 임베딩이 없는 항목은 스킵한다.
+이미 변환·임베딩된 항목을 그대로 옮긴다. 원천(S3 캐글)에서 다시 변환하거나 Bedrock 을 다시
+부르지 않으므로 비용이 없다. slug 기준 upsert 라 몇 번을 재실행해도 같은 결과다.
+임베딩이 없는 항목은 스킵한다.
+
+입력은 둘 중 하나다.
+  기본        DynamoDB `routines` 를 Scan 한다 (--table, --region).
+  --source    JSONL(.gz) 파일. DynamoDB 전량 덤프로, embedding 은 Binary 를 base64 로 적은 것이다.
+              s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz 또는 로컬 경로.
+              DynamoDB routines 를 지운 뒤에는 이쪽만 남는다.
 
 스키마는 scripts/sql/routines_pgvector.sql 을 먼저 적용한다.
 
 사용 예:
     export PG_DSN="postgresql://fitset:...@fitset-rds-pgvector.../fitset"
-    uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py --dry-run
-    uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py --limit 200
-    uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py
+    python scripts/load_routines_postgres.py --dry-run
+    python scripts/load_routines_postgres.py --limit 200
+    python scripts/load_routines_postgres.py
+    python scripts/load_routines_postgres.py --source s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz
 """
 
 import argparse
+import base64
+import gzip
+import io
 import json
 import os
 import struct
@@ -77,6 +87,30 @@ def scan_items(table, limit):
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
+def open_source(source):
+    """--source 를 줄 단위 텍스트 스트림으로 연다. s3:// 와 로컬, .gz 를 모두 받는다."""
+    if source.startswith("s3://"):
+        bucket, key = source[5:].split("/", 1)
+        raw = boto3.client("s3", region_name=ARGS.region).get_object(Bucket=bucket, Key=key)["Body"]
+    else:
+        raw = open(source, "rb")
+    if source.endswith(".gz"):
+        raw = gzip.GzipFile(fileobj=raw)
+    return io.TextIOWrapper(raw, encoding="utf-8")
+
+
+def snapshot_items(source, limit):
+    """JSONL 스냅샷을 한 줄씩 DynamoDB item 꼴로 돌려준다. embedding 은 base64 를 bytes 로 되돌린다."""
+    with open_source(source) as f:
+        for count, line in enumerate(f, 1):
+            item = json.loads(line)
+            if isinstance(item.get("embedding"), str):
+                item["embedding"] = base64.b64decode(item["embedding"])
+            yield item
+            if limit and count >= limit:
+                return
+
+
 def build_row(item, dimension):
     """DynamoDB item 을 routines 행으로 만든다. 임베딩이 없으면 None."""
     embedding = item.get("embedding")
@@ -126,7 +160,11 @@ def main():
     dsn = ARGS.dsn or os.environ.get("PG_DSN")
     if not dsn and not ARGS.dry_run:
         sys.exit("PG_DSN 환경변수 또는 --dsn 이 필요하다")
-    table = boto3.resource("dynamodb", region_name=ARGS.region).Table(ARGS.table)
+    if ARGS.source:
+        items = snapshot_items(ARGS.source, ARGS.limit)
+    else:
+        table = boto3.resource("dynamodb", region_name=ARGS.region).Table(ARGS.table)
+        items = scan_items(table, ARGS.limit)
     conn = None
     if not ARGS.dry_run:
         conn = psycopg.connect(dsn)
@@ -134,7 +172,7 @@ def main():
 
     stats = {"scanned": 0, "skipped_no_embedding": 0, "written": 0}
     batch = []
-    for item in scan_items(table, ARGS.limit):
+    for item in items:
         stats["scanned"] += 1
         built = build_row(item, ARGS.dimension)
         if built is None:
@@ -159,6 +197,7 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--source", help="JSONL(.gz) 스냅샷 경로. s3:// 또는 로컬. 없으면 DynamoDB Scan")
     parser.add_argument("--table", default="routines")
     parser.add_argument("--region", default="ap-northeast-2")
     parser.add_argument("--dimension", type=int, default=1024)

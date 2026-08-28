@@ -68,7 +68,7 @@ LIMIT 30;
 
 ```
 DynamoDB routines (변환 완료본, 임베딩 포함)
-  → scripts/load_routines_postgres.py  (Scan, slug upsert, 500건 트랜잭션)
+  → scripts/load_routines_postgres.py  (Scan 또는 --source S3 스냅샷, slug upsert, 500건 트랜잭션)
   → routines
 ```
 
