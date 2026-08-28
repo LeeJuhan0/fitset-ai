@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     mysql_connect_timeout: int = 2
     mysql_read_timeout: int = 5
 
+    # 루틴 검색 저장소 Postgres(pgvector, docs/루틴 저장소 pgvector.md) — routines 테이블 하나.
+    # host 미설정이면 루틴 생성이 503 으로 물러난다 (로컬 기본). 비밀번호는 ExternalSecret 이 주입
+    pg_host: str | None = None
+    pg_port: int = 5432
+    pg_user: str = "admin"
+    pg_password: str = ""
+    pg_database: str = "fitset"
+    pg_connect_timeout: int = 2
+    pg_statement_timeout: float = 2.0   # 초. 검색 1건 상한 — 필터 후 2만 건 exact 정렬도 수십 ms
+    pg_pool_min: int = 1
+    pg_pool_max: int = 5
+
     # 인증 (JWT RS256) — 백엔드가 게시한 JWKS 공개키로 검증, 로컬 개발은 PEM 직접 주입으로 우회
     # (로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증되지 않는다)
     jwks_url: str = "https://api.fitset.kro.kr/.well-known/jwks.json"
