@@ -12,6 +12,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # 루틴 검색 통합 테스트(tests/test_routines_pg_integration.py)용 pgvector. 컨테이너가 없으면 그 파일만 skip 된다.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: fitset
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U admin -d fitset"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      PG_TEST_DSN: postgresql+psycopg://admin:test@localhost:5432/fitset
     steps:
       - uses: actions/checkout@v4
 

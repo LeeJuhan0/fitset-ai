@@ -25,7 +25,7 @@
 | 2 | ai-server | Postgres 클라이언트. SQLAlchemy 엔진(psycopg3), 설정(`PG_HOST` 등), 미설정 시 `is_configured=False` | `app/clients/postgres.py`, `app/core/config.py`, `pyproject.toml` | 완료(2026-08-28). 단위 테스트 4건, `/health` 에 `SELECT 1`, 로컬 컨테이너에서 READ ONLY 세션이 INSERT 를 거부하는 것 확인 |
 | 3 | ai-server | 검색 리포지토리. `domain.Routine` 엔티티 + `search_statement()` select 조립 + `search()`. 결과는 `(slug, exercise_names, body)` | `app/routines/repository.py` | 완료(2026-08-28). SQL 절 5개·바인딩·벡터 전달 테스트 4건, 로컬 컨테이너 500건에서 필터·정렬 확인 |
 | 4 | ai-server | 서비스 전환. `_filter_candidates`·numpy·`RoutineStore`·`passes_filters` 제거, `generate_routine` ④~⑦ 을 `repository.search` 호출로 교체, 기피 부위 재시도 유지 | `app/routines/service.py`, `app/main.py` | 완료(2026-08-28). 서비스 테스트 4건(기피 재시도, 후보 없음 409, LLM 폴백, 미설정 503), dev_local 은 검색 목으로 |
-| 5 | ai-server | 통합 테스트. CI 에 `pgvector/pgvector:pg17` 서비스 컨테이너, DDL 적용 후 픽스처 50건으로 필터·정렬 검증 | `.github/workflows/ci.yml`, `tests/test_routines_pg.py` | CI 녹색 |
+| 5 | ai-server | 통합 테스트. CI 에 `pgvector/pgvector:pg17` 서비스 컨테이너, DDL 적용 후 픽스처 8건으로 필터·정렬·read-only 검증 | `.github/workflows/ci.yml`, `tests/test_routines_pg_integration.py` | 완료(2026-08-28). `PG_TEST_DSN` 없으면 skip, 있으면 6건. 로컬은 docker 컨테이너로 |
 | 6 | ai-server | 정리. `load_routines_dynamodb.py`·`reindex_routines.py`·`embed_routines.py` 의 DynamoDB 쓰기 경로를 Postgres 로 통일하거나 삭제, `routines_scan_limit` 설정 삭제, 문서 갱신 | `scripts/`, `docs/`, `CLAUDE.md` | DynamoDB `routines` 테이블 미참조 |
 | 7 | 운영 | stage 검증 후 DynamoDB `routines` 테이블 삭제, prod 전환 시 Postgres prod 인스턴스 또는 stage 공유 결정 | AWS | stage 루틴 생성 정상 |
 
@@ -45,7 +45,7 @@
 
 ### 5. 테스트
 
-룰 필터 단위 테스트(`domain.passes_filters`)는 SQL 로 옮겨가므로 파이썬 쪽은 삭제하고, 같은 케이스를 SQL 통합 테스트로 옮긴다. 로컬은 `docker run -e POSTGRES_PASSWORD=x -p 5432:5432 pgvector/pgvector:pg17`.
+룰 필터 단위 테스트(`domain.passes_filters`)는 SQL 로 옮겨갔으므로 파이썬 쪽은 삭제했고, 같은 케이스를 `tests/test_routines_pg_integration.py` 가 실제 DB 로 검증한다. 로컬은 `docker run -e POSTGRES_PASSWORD=x -p 5432:5432 pgvector/pgvector:pg17`.
 
 ## 바꾸지 않는 것
 
