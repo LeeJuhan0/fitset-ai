@@ -6,32 +6,12 @@ search() 가 룰 필터 5개와 코사인 상위 K 를 쿼리 1건으로 처리�
 from dataclasses import dataclass
 
 import numpy as np
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, SmallInteger, Text, or_, select
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import or_, select
 
 from app.clients import postgres
-from app.core.orm import SearchBase
-from app.routines.domain import LEVEL_ORDER
+from app.routines.domain import LEVEL_ORDER, Routine
 
 LEVEL_NAME = {order: name for name, order in LEVEL_ORDER.items()}
-
-
-class Routine(SearchBase):
-    """routines 테이블 — 검색과 LLM 선택 프롬프트에 쓰는 컬럼만 선언한다 (scripts/sql/routines_pgvector.sql 과 1:1)."""
-
-    __tablename__ = "routines"
-
-    slug: Mapped[str] = mapped_column(Text, primary_key=True)
-    goal: Mapped[str | None] = mapped_column(Text)
-    level: Mapped[int] = mapped_column(SmallInteger)            # 0 beginner, 1 intermediate, 2 advanced
-    minutes: Mapped[int | None] = mapped_column(SmallInteger)   # NULL 이면 시간 필터 통과
-    muscle_groups: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    bodyweight_only: Mapped[bool] = mapped_column(Boolean)
-    exercise_names: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    body: Mapped[dict] = mapped_column(JSONB)                   # 세트 상세까지 담긴 전체 루틴
-    embedding = mapped_column(Vector(1024))
 
 
 @dataclass(frozen=True)
