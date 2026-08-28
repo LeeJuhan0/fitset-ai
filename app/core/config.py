@@ -16,7 +16,6 @@ class Settings(BaseSettings):
 
     # DynamoDB routines (변환 완료본 + 임베딩)
     routines_table: str = "routines"
-    routines_scan_limit: int | None = None   # 개발용 — 부팅 로드 건수 제한
 
     # 종목 마스터 (206종, repo 동봉)
     exercise_metadata_path: str = "data/exercise-metadata.ko.json"

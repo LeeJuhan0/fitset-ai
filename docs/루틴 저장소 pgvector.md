@@ -36,7 +36,7 @@
 | 랭킹 | `embedding` vector(1024), `embedding_model` | ORDER BY 코사인 |
 | 응답 | `exercise_names` text[], `body` jsonb | LLM 선택 프롬프트와 응답 조립 원본 |
 
-`body`는 지금 `RoutineStore.get_full`이 돌려주던 dict 그대로라 presenter가 그대로 쓴다. 종목별 집계가 필요하면 `jsonb_array_elements(body->'exercises')`로 펼치고, 잦아지면 materialized view나 `body` GIN 인덱스(`jsonb_path_ops`)를 그때 더한다.
+`body`는 종전 인메모리 스토어의 `get_full`이 돌려주던 dict 그대로라 응답 조립이 그대로 쓴다. 종목별 집계가 필요하면 `jsonb_array_elements(body->'exercises')`로 펼치고, 잦아지면 materialized view나 `body` GIN 인덱스(`jsonb_path_ops`)를 그때 더한다.
 
 ## 4. 인덱스
 

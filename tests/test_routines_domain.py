@@ -93,15 +93,6 @@ def test_effective_avoided_client_request_wins():
     assert domain.effective_avoided(None, ["chest"]) == set()
 
 
-def test_passes_filters_muscle_intersection_and_level():
-    base = dict(avoided=set(), level="intermediate", minutes=50, tolerance=0.2, home_only=False)
-    assert domain.passes_filters(ROUTINE, muscle_groups=["chest"], **base)
-    assert not domain.passes_filters(ROUTINE, muscle_groups=["back"], **base)          # 교집합 없음
-    assert not domain.passes_filters(ROUTINE, muscle_groups=["chest"], **{**base, "level": "beginner"})   # 수준 상한
-    assert not domain.passes_filters(ROUTINE, muscle_groups=["chest"], **{**base, "minutes": 30})         # ±20% 밖
-    assert not domain.passes_filters(ROUTINE, muscle_groups=["chest"], **{**base, "avoided": {"triceps"}})
-    assert not domain.passes_filters(ROUTINE, muscle_groups=["chest"], **{**base, "home_only": True})     # 장비 필요 루틴
-
 
 def test_bodyweight_ratio_home_user():
     workouts = [

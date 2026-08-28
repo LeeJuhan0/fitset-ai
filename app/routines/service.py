@@ -2,10 +2,8 @@ import asyncio
 import logging
 import random
 import re
-import time
 
-import numpy as np
-
+from app.clients import postgres
 from app.core import llm, ratelimit
 from app.core.config import get_settings
 from app.core.errors import (
@@ -17,7 +15,7 @@ from app.core.errors import (
 from app.exercises import repository as exercise_catalog
 from app.routines import domain, prompts
 from app.exercises.repository import get_exercise_meta
-from app.routines.repository import get_routine_store
+from app.routines import repository
 from app.routines.schemas import (
     RoutineExerciseOut,
     RoutineGenerateRequest,
@@ -35,9 +33,8 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     if not ratelimit.routine_limiter().allow(user_id):
         raise RateLimitedError()
     settings = get_settings()
-    store = get_routine_store()
-    if not store.ready:
-        raise AiUnavailableError("루틴 데이터를 로딩 중입니다. 잠시 후 다시 시도해주세요.")
+    if not postgres.is_configured():
+        raise AiUnavailableError("루틴 검색 저장소가 설정되지 않았습니다.")
 
     # ② goal이 프로필로 이동(2026-07-29, 명세 §1)해 쿼리 변환이 프로필에 의존한다 —
     # 프로필을 먼저 받고, 기록 조회와 변환 LLM만 병렬로 돌린다
@@ -62,77 +59,43 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     ratio = domain.bodyweight_ratio(workouts, meta)
     home_only = ratio is not None and ratio >= settings.bodyweight_home_ratio
 
-    # ④·⑤ 조건 결합 + 룰 필터 통과 전체를 후보로
+    # ④·⑤ 조건 결합 — 룰 필터는 Postgres WHERE 절이 맡는다(repository.search_statement)
     # 기피 부위 = 프로필 조회값 ∪ context에서 파싱한 통증·부상 부위 (양쪽 모두 요청 부위가 우선)
     avoided = domain.effective_avoided(profile.get("avoidBodyParts"), request.muscle_groups)
     parsed = domain.effective_avoided(sorted(parsed_avoided), request.muscle_groups)
     if parsed:
         # LLM 오파싱 여부를 사후에 확인할 수 있도록 적용된 기피를 남긴다
         logger.info("context-parsed avoid applied: %s", sorted(parsed))
-    candidates = _filter_candidates(store, request, avoided | parsed, home_only, settings.minutes_tolerance)
 
-    # 파싱한 기피만으로 후보가 비면 그것만 풀고 재시도한다 — 프로필 기피는 유지
-    if not candidates and parsed:
-        logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed))
-        candidates = _filter_candidates(store, request, avoided, home_only, settings.minutes_tolerance)
-    if not candidates:
-        raise NoRoutineCandidateError()
-
-    # ⑥ 쿼리 임베딩 → 코사인 전량 → 탑30 → 랜덤 5 → LLM 일등 선택
+    # ⑥ 쿼리 임베딩 → 룰 필터 + 코사인 상위 K 를 쿼리 1건으로 → 랜덤 5 → LLM 일등 선택
     try:
         query_vector = await asyncio.to_thread(llm.embed_query, query_description)
     except Exception as exc:
         # 폴백이 없는 유일한 구간 — 503으로 나가므로 원인을 남긴다
         logger.exception("query embedding failed")
         raise AiUnavailableError() from exc
-    query = np.asarray(query_vector, dtype=np.float32)
-    query /= np.linalg.norm(query) or 1.0
-    # 후보 행렬 복사를 피하려고 전체 행렬곱 후 후보만 취한다
-    similarities = (store.vectors @ query)[candidates]
-    ranked = [candidates[i] for i in np.argsort(-similarities)]
-    top = ranked[: settings.cosine_top_k]
-    sampled = random.sample(top, min(settings.llm_candidate_count, len(top)))
-    chosen = await _pick_with_llm(sampled, store, query_description)
-    chosen_slug = store.routines[chosen if chosen is not None else top[0]]["slug"]
 
-    # ⑦ 최종 선택 루틴만 전체 조회(GetItem — 인메모리는 라이트 필드뿐) 후 응답 변환
-    routine = await asyncio.to_thread(store.get_full, chosen_slug)
-    if routine is None:
-        raise AiUnavailableError("선택된 루틴을 불러오지 못했습니다.")
+    def filters(avoid: set[str]) -> repository.SearchFilters:
+        return repository.SearchFilters(
+            muscle_groups=request.muscle_groups, avoided=avoid, level=request.level,
+            minutes=request.minutes, tolerance=settings.minutes_tolerance, home_only=home_only,
+        )
+
+    top = await asyncio.to_thread(repository.search, filters(avoided | parsed), query_vector, settings.cosine_top_k)
+    # 파싱한 기피만으로 후보가 비면 그것만 풀고 재시도한다 — 프로필 기피는 유지
+    if not top and parsed:
+        logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed))
+        top = await asyncio.to_thread(repository.search, filters(avoided), query_vector, settings.cosine_top_k)
+    if not top:
+        raise NoRoutineCandidateError()
+
+    sampled = random.sample(top, min(settings.llm_candidate_count, len(top)))
+    chosen = await _pick_with_llm(sampled, query_description)
+    routine = (chosen if chosen is not None else top[0])["body"]
+
+    # ⑦ 응답 변환 — body 가 세트 상세까지 담긴 전체 루틴이라 추가 조회가 없다
     return _build_response(routine, request, profile, stats, meta)
 
-
-def _filter_candidates(
-    store,
-    request: RoutineGenerateRequest,
-    avoided: set[str],
-    home_only: bool,
-    tolerance: float,
-) -> list[int]:
-    """룰 필터를 통과한 루틴 인덱스.
-
-    순수 파이썬 O(N) 루프가 이벤트 루프에서 돈다 — 적재 N이 커지면 요청 전체가 이 구간에
-    정지한다(감사 F11). 아래 측정 로그로 실측치를 확인한 뒤 벡터화 여부를 결정한다.
-    """
-    started = time.perf_counter()
-    matched = [
-        index
-        for index, routine in enumerate(store.routines)
-        if domain.passes_filters(
-            routine,
-            muscle_groups=request.muscle_groups,
-            avoided=avoided,
-            level=request.level,
-            minutes=request.minutes,
-            tolerance=tolerance,
-            home_only=home_only,
-        )
-    ]
-    logger.info(
-        "rule filter: %d/%d passed in %.1fms",
-        len(matched), len(store.routines), (time.perf_counter() - started) * 1000,
-    )
-    return matched
 
 
 async def _analyze_query(request: RoutineGenerateRequest, goal: str) -> tuple[str, set[str], list[str]]:
@@ -159,10 +122,9 @@ async def _analyze_query(request: RoutineGenerateRequest, goal: str) -> tuple[st
     return description, avoided, unsafe
 
 
-async def _pick_with_llm(sampled: list[int], store, query_description: str) -> int | None:
+async def _pick_with_llm(sampled: list[dict], query_description: str) -> dict | None:
     """탑5 중 일등 선택 (LLM). 실패·범위 밖 응답이면 None → 호출부가 코사인 1위 폴백."""
-    candidates = [store.routines[i] for i in sampled]
-    system, user = prompts.pick_best(candidates, query_description)
+    system, user = prompts.pick_best(sampled, query_description)
     try:
         answer = await asyncio.to_thread(llm.complete, system, user, 10)
     except Exception:

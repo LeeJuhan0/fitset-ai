@@ -152,31 +152,6 @@ def parse_query_analysis(raw: str) -> tuple[str | None, set[str], list[str]]:
     return description.strip(), avoid, unsafe
 
 
-def passes_filters(
-    routine: dict,
-    *,
-    muscle_groups: list[str],
-    avoided: set[str],
-    level: str,
-    minutes: int,
-    tolerance: float,
-    home_only: bool,
-) -> bool:
-    """룰 필터 확정 규칙 — 부위 교집합·실효 기피·수준 상한·시간 ±tolerance·홈트 장비."""
-    routine_muscles = set(routine.get("muscle_groups", []))
-    if not routine_muscles & set(muscle_groups):
-        return False
-    if avoided & routine_muscles:
-        return False
-    if LEVEL_ORDER.get(routine.get("level", "beginner"), 0) > LEVEL_ORDER[level]:
-        return False
-    routine_minutes = routine.get("minutes_per_routine")
-    if routine_minutes and abs(routine_minutes - minutes) > minutes * tolerance:
-        return False
-    if home_only and not set(routine.get("equipment", [])) <= {"bodyweight"}:
-        return False
-    return True
-
 
 def _exercise_slug(exercise: dict) -> str | None:
     # 내부 API 응답의 종목 참조 — 필드명 slug 확정이나 과도기 exerciseId도 수용

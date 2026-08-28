@@ -24,7 +24,7 @@
 | 1 | infra | RDS Postgres 17 db.t4g.micro (stage data 서브넷, SG 5432), SSM `/fitset/stage/pg/{host,password}`, ExternalSecret 항목 추가 | fitset-infra `terraform/rds.tf`, `gitops/charts/ai-chat-api/values*.yaml` | `psql` 접속, DDL 적용, 적재 스크립트 전량 완료(25,853건), 전량 EXPLAIN ANALYZE 로 벡터 인덱스 필요 여부 확정 |
 | 2 | ai-server | Postgres 클라이언트. SQLAlchemy 엔진(psycopg3), 설정(`PG_HOST` 등), 미설정 시 `is_configured=False` | `app/clients/postgres.py`, `app/core/config.py`, `pyproject.toml` | 완료(2026-08-28). 단위 테스트 4건, `/health` 에 `SELECT 1`, 로컬 컨테이너에서 READ ONLY 세션이 INSERT 를 거부하는 것 확인 |
 | 3 | ai-server | 검색 리포지토리. `Routine` 엔티티 + `search_statement()` select 조립 + `search()`. 결과는 `(slug, exercise_names, body)` | `app/routines/repository.py` | 완료(2026-08-28). SQL 절 5개·바인딩·벡터 전달 테스트 4건, 로컬 컨테이너 500건에서 필터·정렬 확인 |
-| 4 | ai-server | 서비스 전환. `_filter_candidates`·numpy·`RoutineStore` 제거, `generate_routine` ④~⑦ 을 리포지토리 호출로 교체, 기피 부위 재시도 유지 | `app/routines/service.py`, `app/main.py` | 기존 서비스 테스트를 리포지토리 목으로 통과 |
+| 4 | ai-server | 서비스 전환. `_filter_candidates`·numpy·`RoutineStore`·`passes_filters` 제거, `generate_routine` ④~⑦ 을 `repository.search` 호출로 교체, 기피 부위 재시도 유지 | `app/routines/service.py`, `app/main.py` | 완료(2026-08-28). 서비스 테스트 4건(기피 재시도, 후보 없음 409, LLM 폴백, 미설정 503), dev_local 은 검색 목으로 |
 | 5 | ai-server | 통합 테스트. CI 에 `pgvector/pgvector:pg17` 서비스 컨테이너, DDL 적용 후 픽스처 50건으로 필터·정렬 검증 | `.github/workflows/ci.yml`, `tests/test_routines_pg.py` | CI 녹색 |
 | 6 | ai-server | 정리. `load_routines_dynamodb.py`·`reindex_routines.py`·`embed_routines.py` 의 DynamoDB 쓰기 경로를 Postgres 로 통일하거나 삭제, `routines_scan_limit` 설정 삭제, 문서 갱신 | `scripts/`, `docs/`, `CLAUDE.md` | DynamoDB `routines` 테이블 미참조 |
 | 7 | 운영 | stage 검증 후 DynamoDB `routines` 테이블 삭제, prod 전환 시 Postgres prod 인스턴스 또는 stage 공유 결정 | AWS | stage 루틴 생성 정상 |
@@ -41,7 +41,7 @@
 
 ### 4. 서비스
 
-바뀌는 것은 ④~⑦ 구간뿐이다. `store.ready` 가드는 `postgres.is_configured()` 로 바뀐다. `_pick_with_llm` 은 `exercise_names` 만 쓰므로 시그니처만 조정한다.
+바뀌는 것은 ④~⑦ 구간뿐이다. `store.ready` 가드는 `postgres.is_configured()` 로 바꿨다. `_pick_with_llm` 은 `exercise_names` 만 쓰므로 시그니처만 조정한다.
 
 ### 5. 테스트
 

@@ -21,7 +21,6 @@ from app.exercises import router as exercises_router
 from app.exercises.repository import get_exercise_catalog, get_exercise_meta
 from app.routines import router as routines_router
 from app.clients import postgres
-from app.routines.repository import get_routine_store
 
 configure_logging()
 logger = logging.getLogger("fitset")
@@ -141,10 +140,10 @@ def _level_for(status: int) -> int:
 @app.get("/health", include_in_schema=False)
 @app.get("/ai/v1/health", include_in_schema=False)
 async def health() -> JSONResponse:
-    """프로세스 생존 여부로 응답한다. 검색 저장소가 설정돼 있으면 SELECT 1 까지 확인한다."""
+    """프로세스 생존 여부로 응답한다. 루틴 검색 저장소가 설정돼 있으면 SELECT 1 까지 확인한다."""
     if postgres.is_configured() and not await asyncio.to_thread(postgres.ping):
         return JSONResponse(status_code=503, content={"status": "postgres unavailable"})
-    return JSONResponse(content={"status": "ok", "routines": len(get_routine_store().routines)})
+    return JSONResponse(content={"status": "ok"})
 
 
 app.include_router(routines_router.router)

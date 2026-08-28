@@ -39,7 +39,7 @@ from app.core import llm
 from app.core.clock import iso_utc
 from app.main import app
 from app.exercises.repository import get_exercise_meta
-from app.routines.repository import get_routine_store
+from app.routines import repository as routines_repository
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 NOW = datetime.now(timezone.utc)
@@ -295,12 +295,20 @@ FULL_ROUTINES = {
 
 
 def _install_fake_routine_store():
-    store = get_routine_store()
-    store.routines = [dict(r) for r in LIGHT_ROUTINES]
-    store.vectors = np.zeros((len(LIGHT_ROUTINES), 1024), dtype=np.float32)
-    store.ready = True
-    store.load = lambda: None   # lifespan의 실제 Scan 차단
-    store.get_full = lambda slug: FULL_ROUTINES.get(slug)
+    """Postgres 없이 돌리기 위해 검색을 인메모리 부위 교집합으로 대체한다 (정렬 없음)."""
+    from app.clients import postgres
+
+    postgres.is_configured = lambda: True
+
+    def fake_search(filters, query_vector, limit):
+        rows = [
+            {**light, "body": FULL_ROUTINES.get(light["slug"])}
+            for light in LIGHT_ROUTINES
+            if set(light["muscle_groups"]) & set(filters.muscle_groups)
+        ]
+        return rows[:limit]
+
+    routines_repository.search = fake_search
 
 
 # ── LLM 대체 (선택) ───────────────────────────────────────────────────
