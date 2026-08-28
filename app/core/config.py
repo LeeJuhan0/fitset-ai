@@ -48,7 +48,6 @@ class Settings(BaseSettings):
     pg_database: str = "fitset"
     pg_connect_timeout: int = 2
     pg_statement_timeout: float = 2.0   # 초. 검색 1건 상한 — 필터 후 2만 건 exact 정렬도 수십 ms
-    pg_pool_min: int = 1
     pg_pool_max: int = 5
 
     # 인증 (JWT RS256) — 백엔드가 게시한 JWKS 공개키로 검증, 로컬 개발은 PEM 직접 주입으로 우회

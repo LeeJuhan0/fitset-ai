@@ -82,7 +82,7 @@ Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안�
 | 인스턴스 | db.t4g.micro, gp3 20GB |
 | 배치 | fitset-infra `terraform/rds.tf`, stage data 서브넷, SG 5432는 app-stage CIDR만 |
 | 자격 | SSM `/fitset/stage/pg/host`, `/fitset/stage/pg/password`, ExternalSecret으로 주입 |
-| 앱 연결 | psycopg3 풀 min 1 max 5, READ ONLY, statement_timeout 2초 |
+| 앱 연결 | SQLAlchemy `postgresql+psycopg` 엔진, pool_size 5, 세션 `default_transaction_read_only=on`, statement_timeout 2초. 엔티티 `routines.repository.Routine`(`pgvector.sqlalchemy.Vector`), 쿼리는 `select()` 조립 |
 
 크기는 임베딩 105MB에 본문 30MB다. shared_buffers 256MB에 검색 테이블이 다 들어가진 않지만 필터 후 접근하는 행만 읽으므로 문제 없다.
 

@@ -9,3 +9,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 class BackendBase(DeclarativeBase):
     """백엔드 스키마 전용 베이스 — 형태의 정본은 docs/백엔드 ERD.md (2026-08-12 공유본)."""
+
+
+class SearchBase(DeclarativeBase):
+    """루틴 검색 저장소(Postgres pgvector) 전용 베이스 — 정본은 scripts/sql/routines_pgvector.sql."""

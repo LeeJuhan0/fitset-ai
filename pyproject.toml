@@ -16,7 +16,7 @@ dependencies = [
     "langchain-aws>=0.2",
     "pymysql>=1.2.0",
     "sqlalchemy>=2.0.52",
-    "psycopg[binary,pool]>=3.2",
+    "psycopg[binary]>=3.2",
     "pgvector>=0.3",
 ]
 

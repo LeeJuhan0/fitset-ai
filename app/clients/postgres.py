@@ -1,17 +1,16 @@
 """루틴 검색 저장소 Postgres(pgvector) 실행기 — 외부 경계(clients 레이어).
 
-routines 테이블 한 곳만 읽는다. SQL 은 routines/repository 가 조립하고 값은 전부 바인딩
-파라미터로만 들어간다. 세션은 READ ONLY 로 열고 statement_timeout 을 걸어 검색 한 건이
-스레드를 오래 물지 못하게 한다. 전 함수 동기 — async 호출부가 asyncio.to_thread 로 감싼다.
+mysql.py 와 같은 꼴이다. routines/repository 가 엔티티(core/orm.SearchBase)로 조립한 SELECT 만
+실행하고 값은 전부 바인딩 파라미터로 들어간다. 세션은 READ ONLY, statement_timeout 으로 검색
+한 건이 스레드를 오래 물지 못하게 한다. 전 함수 동기 — async 호출부가 asyncio.to_thread 로 감싼다.
 설계는 docs/루틴 저장소 pgvector.md.
 """
 import logging
 from functools import lru_cache
 
-import psycopg
-from pgvector.psycopg import register_vector
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
+from sqlalchemy import URL, Select, create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import DomainError
@@ -24,58 +23,55 @@ def is_configured() -> bool:
     return get_settings().pg_host is not None
 
 
-def dsn() -> str:
-    """설정값으로 조립한 접속 문자열 — 비밀번호는 로그에 남기지 않는다."""
+def url() -> URL:
+    """설정값으로 조립한 접속 URL — str() 로 찍어도 비밀번호는 가려진다."""
     settings = get_settings()
-    return psycopg.conninfo.make_conninfo(
+    return URL.create(
+        "postgresql+psycopg",
+        username=settings.pg_user,
+        password=settings.pg_password,
         host=settings.pg_host,
         port=settings.pg_port,
-        user=settings.pg_user,
-        password=settings.pg_password,
-        dbname=settings.pg_database,
-        connect_timeout=settings.pg_connect_timeout,
-        options=f"-c statement_timeout={int(settings.pg_statement_timeout * 1000)}",
+        database=settings.pg_database,
     )
-
-
-def _configure(conn: psycopg.Connection) -> None:
-    """풀이 커넥션을 만들 때마다 — vector 어댑터 등록, 세션 READ ONLY."""
-    register_vector(conn)
-    conn.read_only = True
 
 
 @lru_cache
-def _pool() -> ConnectionPool:
-    """프로세스 전역 커넥션 풀 — 파드당 최대 5, 레플리카 2 면 RDS 에 10 커넥션."""
+def _engine():
+    """프로세스 전역 엔진 — 파드당 커넥션 최대 5, 레플리카 2 면 RDS 에 10."""
     settings = get_settings()
-    return ConnectionPool(
-        dsn(),
-        min_size=settings.pg_pool_min,
-        max_size=settings.pg_pool_max,
-        configure=_configure,
-        kwargs={"row_factory": dict_row},
-        open=True,
+    return create_engine(
+        url(),
+        pool_size=settings.pg_pool_max,
+        max_overflow=0,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        connect_args={
+            "connect_timeout": settings.pg_connect_timeout,
+            # 세션 READ ONLY + 쿼리 상한. 검색 1건이 2초를 넘기면 DB 가 끊는다
+            "options": (
+                f"-c default_transaction_read_only=on "
+                f"-c statement_timeout={int(settings.pg_statement_timeout * 1000)}"
+            ),
+        },
     )
 
 
-def fetch_all(sql: str, params: dict) -> list[dict]:
-    """SELECT 1건 실행 — 컬럼명 dict 행 목록을 반환한다.
-
-    DB 장애는 DomainError(500)로 번역한다 — 전역 핸들러가 INTERNAL_ERROR 로 응답한다.
-    """
+def fetch_all(stmt: Select) -> list[dict]:
+    """SELECT 문 1건 실행 — 컬럼명 dict 행 목록을 반환한다. DB 장애는 DomainError(500) 로 번역한다."""
     try:
-        with _pool().connection() as conn:
-            return conn.execute(sql, params).fetchall()
-    except psycopg.Error as exc:
+        with Session(_engine()) as session:
+            return [dict(row) for row in session.execute(stmt).mappings().all()]
+    except SQLAlchemyError as exc:
         raise DomainError("루틴 검색 저장소 조회에 실패했습니다.") from exc
 
 
 def ping() -> bool:
-    """헬스체크용 — 풀에서 커넥션을 하나 빌려 SELECT 1. 실패는 False 로 돌려주고 로그만 남긴다."""
+    """헬스체크용 SELECT 1. 실패는 False 로 돌려주고 로그만 남긴다."""
     try:
-        with _pool().connection() as conn:
-            conn.execute("SELECT 1").fetchone()
-    except psycopg.Error:
+        with _engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except SQLAlchemyError:
         logger.warning("postgres ping failed", exc_info=True)
         return False
     return True
@@ -83,7 +79,7 @@ def ping() -> bool:
 
 def close() -> None:
     """종료 시 풀 정리 — 만들어진 적이 없으면 아무것도 하지 않는다."""
-    if _pool.cache_info().currsize == 0:
+    if _engine.cache_info().currsize == 0:
         return
-    _pool().close()
-    _pool.cache_clear()
+    _engine().dispose()
+    _engine.cache_clear()

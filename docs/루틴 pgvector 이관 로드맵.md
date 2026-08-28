@@ -22,8 +22,8 @@
 |---|---|---|---|---|
 | 0 | 이 PR | DDL, 적재 스크립트, 로드맵 | `scripts/sql/`, `scripts/load_routines_postgres.py`, `docs/` | 스크립트 `--dry-run` 통과 |
 | 1 | infra | RDS Postgres 17 db.t4g.micro (stage data 서브넷, SG 5432), SSM `/fitset/stage/pg/{host,password}`, ExternalSecret 항목 추가 | fitset-infra `terraform/rds.tf`, `gitops/charts/ai-chat-api/values*.yaml` | `psql` 접속, DDL 적용, 적재 스크립트 전량 완료(25,853건), 전량 EXPLAIN ANALYZE 로 벡터 인덱스 필요 여부 확정 |
-| 2 | ai-server | Postgres 클라이언트. psycopg3 풀, pgvector 어댑터, 설정(`PG_HOST` 등), 미설정 시 `is_configured=False` | `app/clients/postgres.py`, `app/core/config.py`, `pyproject.toml` | 완료(2026-08-28). 단위 테스트 4건, `/health` 에 `SELECT 1`, 로컬 컨테이너에서 READ ONLY 세션이 INSERT 를 거부하는 것 확인 |
-| 3 | ai-server | 검색 리포지토리. `SearchFilters.bind()` + `search(filters, query_vec, limit)`. 결과는 `(slug, exercise_names, body)` | `app/routines/repository.py` | 완료(2026-08-28). SQL 절 5개·바인딩·벡터 전달 테스트 4건, 로컬 컨테이너 500건에서 필터·정렬 확인 |
+| 2 | ai-server | Postgres 클라이언트. SQLAlchemy 엔진(psycopg3), 설정(`PG_HOST` 등), 미설정 시 `is_configured=False` | `app/clients/postgres.py`, `app/core/config.py`, `pyproject.toml` | 완료(2026-08-28). 단위 테스트 4건, `/health` 에 `SELECT 1`, 로컬 컨테이너에서 READ ONLY 세션이 INSERT 를 거부하는 것 확인 |
+| 3 | ai-server | 검색 리포지토리. `Routine` 엔티티 + `search_statement()` select 조립 + `search()`. 결과는 `(slug, exercise_names, body)` | `app/routines/repository.py` | 완료(2026-08-28). SQL 절 5개·바인딩·벡터 전달 테스트 4건, 로컬 컨테이너 500건에서 필터·정렬 확인 |
 | 4 | ai-server | 서비스 전환. `_filter_candidates`·numpy·`RoutineStore` 제거, `generate_routine` ④~⑦ 을 리포지토리 호출로 교체, 기피 부위 재시도 유지 | `app/routines/service.py`, `app/main.py` | 기존 서비스 테스트를 리포지토리 목으로 통과 |
 | 5 | ai-server | 통합 테스트. CI 에 `pgvector/pgvector:pg17` 서비스 컨테이너, DDL 적용 후 픽스처 50건으로 필터·정렬 검증 | `.github/workflows/ci.yml`, `tests/test_routines_pg.py` | CI 녹색 |
 | 6 | ai-server | 정리. `load_routines_dynamodb.py`·`reindex_routines.py`·`embed_routines.py` 의 DynamoDB 쓰기 경로를 Postgres 로 통일하거나 삭제, `routines_scan_limit` 설정 삭제, 문서 갱신 | `scripts/`, `docs/`, `CLAUDE.md` | DynamoDB `routines` 테이블 미참조 |
@@ -33,11 +33,11 @@
 
 ### 2. 클라이언트
 
-`app/clients/mysql.py` 와 같은 꼴로 둔다. 엔진 대신 `psycopg_pool.ConnectionPool(min_size=1, max_size=5)`, 세션은 `READ ONLY`, `statement_timeout` 2초. 설정은 `pg_host`, `pg_port`, `pg_user`, `pg_password`, `pg_database` 이고 host 가 비면 루틴 생성이 지금처럼 503 으로 물러난다.
+`app/clients/mysql.py` 와 같은 꼴로 둔다. SQLAlchemy `create_engine("postgresql+psycopg", pool_size=5)`, 세션은 `default_transaction_read_only=on`, `statement_timeout` 2초. 설정은 `pg_host`, `pg_port`, `pg_user`, `pg_password`, `pg_database` 이고 host 가 비면 루틴 생성이 지금처럼 503 으로 물러난다.
 
 ### 3. 리포지토리
 
-SQL 은 하나다. 기피 부위 재시도는 `avoided` 를 빈 배열로 다시 부르면 되므로 분기가 없다. `LIMIT` 은 `settings.cosine_top_k`. 반환 행의 `body` 가 곧 지금 `get_full` 이 돌려주던 dict 라 presenter 는 그대로 쓴다.
+엔티티 `Routine`(`pgvector.sqlalchemy.Vector`)으로 `select()` 를 조립한다. `overlap()` 이 `&&`, `cosine_distance()` 가 `<=>` 로 컴파일된다. 기피 부위 재시도는 `avoided` 를 빈 배열로 다시 부르면 되므로 분기가 없다. `LIMIT` 은 `settings.cosine_top_k`. 반환 행의 `body` 가 곧 지금 `get_full` 이 돌려주던 dict 라 presenter 는 그대로 쓴다.
 
 ### 4. 서비스
 
