@@ -19,8 +19,11 @@ logger = logging.getLogger("fitset")
 
 
 def is_configured() -> bool:
-    """검색 저장소 설정 여부 — 미설정 환경(로컬 기본)에서 루틴 생성이 503 으로 물러나게 한다."""
-    return get_settings().pg_host is not None
+    """검색 저장소 설정 여부 — 미설정 환경(로컬 기본)에서 루틴 생성이 503 으로 물러나게 한다.
+
+    빈 문자열도 미설정으로 본다. 매니페스트가 값 없는 env 를 내보내는 경우를 막는다.
+    """
+    return bool(get_settings().pg_host)
 
 
 def url() -> URL:

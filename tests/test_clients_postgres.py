@@ -19,6 +19,8 @@ def _settings(**overrides):
 def test_is_configured_requires_host(monkeypatch):
     monkeypatch.setattr(postgres, "get_settings", lambda: _settings())
     assert postgres.is_configured() is False
+    monkeypatch.setattr(postgres, "get_settings", lambda: _settings(pg_host=""))
+    assert postgres.is_configured() is False
     monkeypatch.setattr(postgres, "get_settings", lambda: _settings(pg_host="db"))
     assert postgres.is_configured() is True
 
