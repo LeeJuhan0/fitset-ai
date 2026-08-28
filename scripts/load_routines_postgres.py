@@ -10,14 +10,20 @@
               s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz 또는 로컬 경로.
               DynamoDB routines 를 지운 뒤에는 이쪽만 남는다.
 
-스키마는 scripts/sql/routines_pgvector.sql 을 먼저 적용한다.
+스키마는 scripts/sql/routines_pgvector.sql 을 먼저 적용한다. --ddl 로 넘기면 적재 전에 여기서 적용한다
+(IF NOT EXISTS 라 멱등, 이미지에 psql 이 없어 psycopg 로 실행).
+
+접속은 --dsn, PG_DSN, 그리고 앱과 같은 PG_HOST/PG_PORT/PG_USER/PG_PASSWORD/PG_DATABASE 순으로 찾는다.
+PG_HOST 가 비어 있으면 아직 RDS 가 없는 것이므로 아무것도 하지 않고 0 으로 끝난다 — ArgoCD hook Job 이
+apply 전에 돌아도 sync 가 실패하지 않게.
 
 사용 예:
     export PG_DSN="postgresql://fitset:...@fitset-rds-pgvector.../fitset"
     python scripts/load_routines_postgres.py --dry-run
     python scripts/load_routines_postgres.py --limit 200
     python scripts/load_routines_postgres.py
-    python scripts/load_routines_postgres.py --source s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz
+    python scripts/load_routines_postgres.py --ddl scripts/sql/routines_pgvector.sql \
+        --source s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz
 """
 
 import argparse
@@ -149,6 +155,30 @@ def build_row(item, dimension):
     return row
 
 
+def resolve_dsn():
+    """--dsn, PG_DSN, 앱과 같은 PG_* 환경변수 순으로 접속 문자열을 만든다. host 가 없으면 None."""
+    if ARGS.dsn or os.environ.get("PG_DSN"):
+        return ARGS.dsn or os.environ["PG_DSN"]
+    host = os.environ.get("PG_HOST", "")
+    if not host:
+        return None
+    user = os.environ.get("PG_USER", "fitset")
+    password = os.environ.get("PG_PASSWORD", "")
+    port = os.environ.get("PG_PORT", "5432")
+    database = os.environ.get("PG_DATABASE", "fitset")
+    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+
+def apply_ddl(conn, path):
+    """DDL 파일을 실행한다. IF NOT EXISTS 라 재실행해도 안전하다."""
+    with open(path, encoding="utf-8") as f:
+        sql = f.read()
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+    print(f"ddl applied: {path}", file=sys.stderr)
+
+
 def write_batch(conn, rows):
     """routines slug upsert. 한 트랜잭션."""
     with conn.cursor() as cur:
@@ -157,9 +187,10 @@ def write_batch(conn, rows):
 
 
 def main():
-    dsn = ARGS.dsn or os.environ.get("PG_DSN")
+    dsn = resolve_dsn()
     if not dsn and not ARGS.dry_run:
-        sys.exit("PG_DSN 환경변수 또는 --dsn 이 필요하다")
+        print("PG_HOST 미설정 — 적재를 건너뛴다", file=sys.stderr)
+        return
     if ARGS.source:
         items = snapshot_items(ARGS.source, ARGS.limit)
     else:
@@ -168,6 +199,8 @@ def main():
     conn = None
     if not ARGS.dry_run:
         conn = psycopg.connect(dsn)
+        if ARGS.ddl:
+            apply_ddl(conn, ARGS.ddl)
         register_vector(conn)
 
     stats = {"scanned": 0, "skipped_no_embedding": 0, "written": 0}
@@ -197,6 +230,7 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--ddl", help="적재 전에 실행할 SQL 파일. 보통 scripts/sql/routines_pgvector.sql")
     parser.add_argument("--source", help="JSONL(.gz) 스냅샷 경로. s3:// 또는 로컬. 없으면 DynamoDB Scan")
     parser.add_argument("--table", default="routines")
     parser.add_argument("--region", default="ap-northeast-2")

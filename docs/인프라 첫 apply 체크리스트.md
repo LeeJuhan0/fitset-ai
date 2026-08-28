@@ -91,49 +91,55 @@ kubectl -n fitset-stage rollout restart deploy/mlflow
 
 이유. mlflow 의 ExternalSecret 이 이 키를 읽는데 SSM 에 없다. 이미지는 sqlite 스냅샷을 굽고 있지만 k8s 에서는 `BACKEND_STORE_URI` 를 RDS 로 주입해 무상태로 뜬다.
 
-### 3.7 stage 종목 카탈로그 채우기
+### 3.7 gitops 에 pgvector 연결과 이미지 갱신
+
+fitset-gitops `gitops/workloads/ai-chat-api/overlays/stage/kustomization.yaml` 에서 두 가지를 바꿔 push 한다.
+
+1. `configMapGenerator` 의 `PG_HOST=` 에 `terraform output -raw rds_pgvector_stage_endpoint` 값을 넣는다.
+2. `images` 의 `newTag` 를 ai-server main 최신 SHA 로 올린다.
+
+이 커밋 하나로 ArgoCD 가 다음을 같이 한다.
+
+| 리소스 | 하는 일 |
+|---|---|
+| Deployment `ai-chat-api` | ConfigMap 이 바뀌어 재기동, pgvector 에 붙는다 |
+| Job `routines-load` (PostSync hook) | DDL 적용 후 S3 스냅샷 25,853건을 pgvector 에 upsert |
+| Job `exercise-catalog-sync-initial` (PostSync hook) | 백엔드 API 를 읽어 `exercise_catalog_stage` 를 채운다 |
+| CronJob `exercise-catalog-sync` | 이후 매일 03:00 KST 갱신 |
+
+이유. `PG_HOST` 와 테이블명은 ConfigMap `ai-chat-api-config` 한 곳에 있고 Deployment·Job·CronJob 이 전부 그걸 읽는다. `PG_HOST` 가 비어 있는 동안은 앱이 루틴 생성만 503 으로 물러나고 Job 은 건너뛰므로, apply 전에 sync 가 돌아도 실패하지 않는다. `/health` 는 Postgres ping 만 하고 테이블이 비었는지는 보지 않으므로 적재가 끝나기 전에도 readiness 는 통과하고, 그동안 루틴 검색만 빈 결과다. 루틴 25,853건은 캐글 원본을 8/25 엄격 규칙으로 변환해 임베딩까지 붙인 것으로, S3 스냅샷은 DynamoDB `routines` 와 같은 내용이다.
+
+확인.
 
 ```bash
-# 클러스터 안 임시 파드(3.8 과 같은 파드)에서
-EXERCISE_CATALOG_TABLE=exercise_catalog_stage python scripts/sync_exercise_catalog.py
+kubectl -n fitset-stage get jobs
+kubectl -n fitset-stage logs job/routines-load          # {"scanned": 25853, ..., "written": 25853}
+kubectl -n fitset-stage logs job/exercise-catalog-sync-initial
 ```
 
-이유. `exercise_catalog` 는 백엔드 공개 API 를 일 1회 배치로 캐시한 파생 테이블이라 새로 만든 stage 사본은 비어 있다. 채우기 전에는 종목 조회가 빈 결과를 낸다. 채팅 테이블 3개는 비어 있는 게 정상이다.
+### 3.8 손으로 해야 할 때
 
-### 3.8 pgvector DDL 과 루틴 적재
-
-ai-server 이미지로 임시 파드를 띄워 실행한다. 이미지에 `scripts/`, psycopg, pgvector, boto3 가 들어 있고, SA `ai-chat-api` 를 쓰면 Pod Identity 로 DynamoDB 읽기가 된다.
+Job 이 실패했거나 부분만 다시 돌리고 싶으면 같은 이미지로 임시 파드를 띄운다. SA `ai-chat-api` 와 ConfigMap·Secret 을 같이 주면 Job 과 같은 환경이다.
 
 ```bash
-kubectl -n fitset-stage run loader --rm -it --overrides='{"spec":{"serviceAccountName":"ai-chat-api"}}' \
-  --image=729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server:3cada1de9da3f64c2a5e6e33d1c719ee8d783ae9 -- bash
+kubectl -n fitset-stage run loader --rm -it --restart=Never \
+  --overrides='{"spec":{"serviceAccountName":"ai-chat-api","containers":[{"name":"loader","image":"729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server:<tag>","command":["bash"],"stdin":true,"tty":true,"envFrom":[{"secretRef":{"name":"ai-chat-api-secrets"}},{"configMapRef":{"name":"ai-chat-api-config"}}]}]}}' \
+  --image=729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server:<tag>
 # 파드 안
-export PG_DSN="postgresql://fitset:<pw>@<rds_pgvector_stage_endpoint>:5432/fitset"
-psql "$PG_DSN" -f scripts/sql/routines_pgvector.sql
-SRC=s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz
-python scripts/load_routines_postgres.py --source $SRC --dry-run
-python scripts/load_routines_postgres.py --source $SRC
-psql "$PG_DSN" -c "select count(*) from routines;"   # 25853
+python scripts/load_routines_postgres.py --ddl scripts/sql/routines_pgvector.sql \
+  --source s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz --dry-run
+python scripts/load_routines_postgres.py --ddl scripts/sql/routines_pgvector.sql \
+  --source s3://fitset-routines-raw/snapshots/routines-strict-20260825.jsonl.gz
+python scripts/sync_exercise_catalog.py
 ```
 
-이유. RDS 는 인터넷 경로가 없어 클러스터 안에서만 접근된다. 루틴 25,853건은 캐글 원본을 8/25 엄격 규칙으로 변환해 임베딩까지 붙인 것으로, DynamoDB `routines` 와 S3 스냅샷 양쪽에 같은 내용이 있다. `--source` 로 S3 스냅샷을 읽으면 DynamoDB 권한이 필요 없고 `routines` 테이블을 나중에 지워도 그대로 쓸 수 있다. `--source` 를 빼면 DynamoDB 를 Scan 한다. slug upsert 라 다시 돌려도 안전하다.
-
-### 3.9 gitops 에 pgvector 연결과 이미지 갱신
-
-fitset-gitops `gitops/workloads/ai-chat-api/overlays/stage/` 에서 두 가지를 바꿔 push 한다.
-
-1. `patch-deployment.yaml` 의 주석 처리된 `PG_HOST` 를 `terraform output -raw rds_pgvector_stage_endpoint` 값으로 연다.
-2. `kustomization.yaml` 의 `newTag` 를 `3cada1de9da3f64c2a5e6e33d1c719ee8d783ae9` 로 올린다.
-
-이유. `/health` 는 `PG_HOST` 가 있을 때만 Postgres 를 ping 하고 실패하면 503 이라, 적재 전에 넣으면 readiness 가 떨어져 트래픽을 못 받는다. 그래서 3.8 뒤에 넣는다. 새 태그는 `PG_HOST` 빈 값 처리 fix 가 들어간 현재 main 이다.
-
-### 3.10 DNS 전환
+### 3.9 DNS 전환
 
 kro.kr 관리 페이지에서 `api-stage.fitset.kro.kr` CNAME 을 새 stage ALB 로 바꾼다. ALB 주소는 `kubectl -n fitset-stage get ingress` 로 본다.
 
 이유. 레코드는 이미 있고 전부 옛 `hangang-alb` 를 가리킨다. core-api(JWKS 발급)와 ai-chat-api 가 같은 호스트를 쓰므로 한 번에 넘어간다. stage 는 prod 와 독립이라 먼저 검증할 수 있다.
 
-### 3.11 최종 확인
+### 3.10 최종 확인
 
 ```bash
 curl -s https://api-stage.fitset.kro.kr/health
@@ -147,4 +153,4 @@ kubectl -n fitset-stage exec deploy/ai-chat-api -- curl -s localhost:8000/health
 2. plan 에 `-/+` 가 있으면 apply 하지 않는다.
 3. `MYSQL_HOST` 에 옛 hangang 주소를 남기지 않는다. 같은 `10.0.0.0/16` 대역이라 fitset VPC 안으로 오라우팅되어 타임아웃난다.
 4. ArgoCD 설정 변경은 fitset-gitops 의 values 로 한다. `terraform apply` 나 `helm upgrade` 로 건드리지 않는다.
-5. 적재(3.8) 전에 `PG_HOST` 를 넣지 않는다.
+5. `PG_HOST` 와 테이블명은 gitops ConfigMap 에만 둔다. Deployment 패치에 따로 적으면 Job 과 값이 갈린다.
