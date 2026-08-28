@@ -7,7 +7,7 @@ slug 기준 upsert 라 몇 번을 재실행해도 같은 결과다. 임베딩이
 스키마는 scripts/sql/routines_pgvector.sql 을 먼저 적용한다.
 
 사용 예:
-    export PG_DSN="postgresql://admin:...@fitset-rds-pgvector.../fitset"
+    export PG_DSN="postgresql://fitset:...@fitset-rds-pgvector.../fitset"
     uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py --dry-run
     uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py --limit 200
     uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py
