@@ -1,6 +1,6 @@
 -- 루틴 검색 저장소 — DynamoDB routines 를 대체하는 Postgres(pgvector) 스키마.
--- 검색 경로는 routines 한 테이블로 끝난다. routine_exercises·routine_sets 는 분석·검수용이며
--- 서비스 요청 경로에서 조인하지 않는다.
+-- 테이블은 routines 하나다. 이 DB 의 역할은 벡터 검색 엔진이라 도메인 정규화를 하지 않는다.
+-- 종목별 집계가 필요하면 jsonb_array_elements(body->'exercises') 로 펼친다.
 --
 -- 적용:  psql "$PG_DSN" -f scripts/sql/routines_pgvector.sql
 -- 적재:  uv run --with boto3 --with "psycopg[binary]" --with pgvector python scripts/load_routines_postgres.py
@@ -41,26 +41,6 @@ CREATE INDEX IF NOT EXISTS routines_bodyweight    ON routines (level, minutes) W
 -- 10만 건을 넘기면 아래를 켜고 hnsw.iterative_scan = relaxed_order 를 함께 설정한다.
 -- CREATE INDEX routines_embedding_hnsw ON routines USING hnsw (embedding vector_cosine_ops);
 
--- 정규화 테이블. 종목별 역조회와 볼륨 집계 같은 분석에 쓴다.
-CREATE TABLE IF NOT EXISTS routine_exercises (
-  routine_id    integer  NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
-  order_index   smallint NOT NULL,
-  exercise_slug text     NOT NULL,                 -- 백엔드 exercise.thumbnail_key 에서 유도한 slug. 다른 DB 라 FK 없음
-  exercise_name text     NOT NULL,
-  PRIMARY KEY (routine_id, order_index)
-);
-CREATE INDEX IF NOT EXISTS routine_exercises_slug ON routine_exercises (exercise_slug);
-
-CREATE TABLE IF NOT EXISTS routine_sets (
-  routine_id   integer  NOT NULL,
-  order_index  smallint NOT NULL,
-  set_index    smallint NOT NULL,
-  reps         smallint,
-  weight       numeric(6,2),                       -- NULL 은 서빙 시 e1RM 으로 채운다
-  duration_sec smallint,
-  PRIMARY KEY (routine_id, order_index, set_index),
-  FOREIGN KEY (routine_id, order_index) REFERENCES routine_exercises(routine_id, order_index) ON DELETE CASCADE
-);
 
 -- 서비스 검색 쿼리 (참고).
 -- SELECT slug, exercise_names, body

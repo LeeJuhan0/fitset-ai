@@ -38,18 +38,8 @@ ON CONFLICT (slug) DO UPDATE SET
   bodyweight_only = EXCLUDED.bodyweight_only, exercise_count = EXCLUDED.exercise_count,
   exercise_names = EXCLUDED.exercise_names, body = EXCLUDED.body, embedding = EXCLUDED.embedding,
   embedding_model = EXCLUDED.embedding_model, source = EXCLUDED.source, updated_at = now()
-RETURNING id
 """
 
-INSERT_EXERCISE = """
-INSERT INTO routine_exercises (routine_id, order_index, exercise_slug, exercise_name)
-VALUES (%s, %s, %s, %s)
-"""
-
-INSERT_SET = """
-INSERT INTO routine_sets (routine_id, order_index, set_index, reps, weight, duration_sec)
-VALUES (%s, %s, %s, %s, %s, %s)
-"""
 
 
 def to_plain(value):
@@ -88,7 +78,7 @@ def scan_items(table, limit):
 
 
 def build_row(item, dimension):
-    """DynamoDB item 을 routines 행과 정규화 행으로 나눈다. 임베딩이 없으면 None."""
+    """DynamoDB item 을 routines 행으로 만든다. 임베딩이 없으면 None."""
     embedding = item.get("embedding")
     if embedding is None:
         return None
@@ -122,22 +112,13 @@ def build_row(item, dimension):
         "embedding_model": plain.get("embedding_model", "unknown"),
         "source": "kaggle",
     }
-    return row, exercises
+    return row
 
 
 def write_batch(conn, rows):
-    """routines upsert 후 정규화 행을 지우고 다시 넣는다. 한 트랜잭션."""
+    """routines slug upsert. 한 트랜잭션."""
     with conn.cursor() as cur:
-        for row, exercises in rows:
-            cur.execute(UPSERT_ROUTINE, row)
-            routine_id = cur.fetchone()[0]
-            cur.execute("DELETE FROM routine_exercises WHERE routine_id = %s", (routine_id,))
-            for ex in exercises:
-                cur.execute(INSERT_EXERCISE, (routine_id, ex["order_index"], ex["slug"], ex["exercise_name"]))
-                cur.executemany(INSERT_SET, [
-                    (routine_id, ex["order_index"], s["order_index"], s.get("reps"), s.get("weight"), s.get("duration_seconds"))
-                    for s in ex.get("sets", [])
-                ])
+        cur.executemany(UPSERT_ROUTINE, rows)
     conn.commit()
 
 

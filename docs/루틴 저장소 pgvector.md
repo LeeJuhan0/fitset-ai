@@ -27,15 +27,16 @@
 
 ## 3. 스키마
 
-검색은 `routines` 한 테이블로 끝난다. 정규화 테이블 둘은 분석용이며 요청 경로에서 조인하지 않는다.
+테이블은 `routines` 하나다. 이 DB의 역할은 벡터 검색 엔진이라 도메인 정규화를 하지 않는다, Atlas나 OpenSearch를 썼어도 컬렉션 하나였을 자리다.
 
-| 테이블 | 역할 | 주요 컬럼 |
+| 컬럼 묶음 | 컬럼 | 쓰임 |
 |---|---|---|
-| `routines` | 검색과 응답 본문 | `slug` UNIQUE, `level` smallint, `minutes`, `muscle_groups` text[], `equipment` text[], `bodyweight_only`, `exercise_names` text[], `body` jsonb, `embedding` vector(1024) |
-| `routine_exercises` | 종목별 역조회 | `(routine_id, order_index)` PK, `exercise_slug` |
-| `routine_sets` | 세트 집계 | `(routine_id, order_index, set_index)` PK, `reps`, `weight` |
+| 식별 | `slug` UNIQUE | 재적재 upsert 키 |
+| 룰 필터 | `level` smallint, `minutes`, `muscle_groups` text[], `equipment` text[], `bodyweight_only` | WHERE 절 |
+| 랭킹 | `embedding` vector(1024), `embedding_model` | ORDER BY 코사인 |
+| 응답 | `exercise_names` text[], `body` jsonb | LLM 선택 프롬프트와 응답 조립 원본 |
 
-`body`는 지금 `RoutineStore.get_full`이 돌려주던 dict 그대로라 presenter가 그대로 쓴다. `exercise_slug`는 백엔드 `exercise.thumbnail_key`에서 유도한 값이고 다른 DB라 FK는 없다.
+`body`는 지금 `RoutineStore.get_full`이 돌려주던 dict 그대로라 presenter가 그대로 쓴다. 종목별 집계가 필요하면 `jsonb_array_elements(body->'exercises')`로 펼치고, 잦아지면 materialized view나 `body` GIN 인덱스(`jsonb_path_ops`)를 그때 더한다.
 
 ## 4. 인덱스
 
@@ -44,7 +45,6 @@
 | `routines_muscle_gin` | GIN (muscle_groups) | `&&` 교집합과 기피, 선택도가 가장 높다 |
 | `routines_level_minutes` | BTREE (level, minutes) | 수준 상한과 시간 범위, GIN 비트맵과 AND |
 | `routines_bodyweight` | BTREE (level, minutes) WHERE bodyweight_only | 홈트 요청만 타는 부분 인덱스 |
-| `routine_exercises_slug` | BTREE (exercise_slug) | 종목 역조회 |
 
 벡터 인덱스는 두지 않는다. 25k건은 필터 후 남는 수백에서 2만 건에 대해 exact 정렬을 해도 수십 ms이고, HNSW는 필터 통과 행이 `ef_search`보다 적으면 30건을 못 채운다. 10만 건을 넘기면 HNSW와 `hnsw.iterative_scan = relaxed_order`를 함께 켠다.
 
@@ -69,7 +69,7 @@ LIMIT 30;
 ```
 DynamoDB routines (변환 완료본, 임베딩 포함)
   → scripts/load_routines_postgres.py  (Scan, slug upsert, 500건 트랜잭션)
-  → routines, routine_exercises, routine_sets
+  → routines
 ```
 
 Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안쪽이다. 몇 번을 돌려도 결과가 같다. 이관이 끝나면 원천(S3 캐글) 변환 배치가 DynamoDB 대신 Postgres에 바로 쓰도록 바꾼다.
@@ -84,7 +84,7 @@ Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안�
 | 자격 | SSM `/fitset/stage/pg/host`, `/fitset/stage/pg/password`, ExternalSecret으로 주입 |
 | 앱 연결 | psycopg3 풀 min 1 max 5, READ ONLY, statement_timeout 2초 |
 
-크기는 임베딩 105MB에 본문 30MB, 정규화 35MB다. shared_buffers 256MB에 검색 테이블이 다 들어가진 않지만 필터 후 접근하는 행만 읽으므로 문제 없다.
+크기는 임베딩 105MB에 본문 30MB다. shared_buffers 256MB에 검색 테이블이 다 들어가진 않지만 필터 후 접근하는 행만 읽으므로 문제 없다.
 
 ## 8. 바꾸지 않는 것
 
@@ -97,7 +97,7 @@ Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안�
 ```dbml
 Project fitset_routines {
   database_type: 'PostgreSQL'
-  Note: 'pgvector 확장 필요. 검색은 routines 단일 테이블, 나머지 둘은 분석용'
+  Note: 'pgvector 확장 필요. 테이블은 routines 하나, 역할은 벡터 검색 엔진'
 }
 
 Table routines {
@@ -128,32 +128,6 @@ Table routines {
   }
 }
 
-Table routine_exercises {
-  routine_id    integer  [not null, ref: > routines.id, note: 'ON DELETE CASCADE']
-  order_index   smallint [not null, note: '루틴 내 순서 0-based']
-  exercise_slug text     [not null, note: '백엔드 exercise.thumbnail_key 유도 slug. 다른 DB 라 FK 없음']
-  exercise_name text     [not null]
-
-  indexes {
-    (routine_id, order_index) [pk]
-    exercise_slug             [type: btree, name: 'routine_exercises_slug', note: '종목이 들어간 루틴 역조회']
-  }
-}
-
-Table routine_sets {
-  routine_id   integer  [not null]
-  order_index  smallint [not null, note: 'routine_exercises 의 순서']
-  set_index    smallint [not null]
-  reps         smallint
-  weight       numeric  [note: 'numeric(6,2). NULL 은 서빙 시 e1RM 으로 채움']
-  duration_sec smallint
-
-  indexes {
-    (routine_id, order_index, set_index) [pk]
-  }
-}
-
-Ref: routine_sets.(routine_id, order_index) > routine_exercises.(routine_id, order_index) [delete: cascade]
 ```
 
 ## 10. 인덱스 최적화 상태
