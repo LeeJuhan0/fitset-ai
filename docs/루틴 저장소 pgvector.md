@@ -91,3 +91,82 @@ Bedrock을 다시 부르지 않으므로 비용이 없고 25,853건에 1분 안�
 1. 요청당 Bedrock 쿼리 임베딩 1회와 LLM 선택 1회.
 2. 채팅, 유저 요약, 종목 카탈로그의 DynamoDB 테이블.
 3. 백엔드 MySQL 직조회(NL2SQL)와 그 엔티티.
+
+## 9. DBML
+
+```dbml
+Project fitset_routines {
+  database_type: 'PostgreSQL'
+  Note: 'pgvector 확장 필요. 검색은 routines 단일 테이블, 나머지 둘은 분석용'
+}
+
+Table routines {
+  id              integer      [pk, increment]
+  slug            text         [unique, not null, note: '루틴 식별자, 재적재 upsert 키']
+  name            text
+  description     text         [note: '원천 프로그램 설명, 임베딩 텍스트의 일부']
+  goal            text         [note: 'hypertrophy, strength, weight_loss, endurance']
+  level           smallint     [not null, note: '0 beginner, 1 intermediate, 2 advanced. 룰 필터 level <= 요청']
+  minutes         smallint     [note: '세트 수 기반 재산출 분. NULL 이면 시간 필터 통과']
+  muscle_groups   text[]       [not null, note: '룰 필터 && 교집합, NOT && 기피']
+  equipment       text[]       [not null]
+  bodyweight_only boolean      [not null, note: 'equipment 가 bodyweight 뿐. 홈트 유저 필터']
+  exercise_count  smallint     [not null]
+  exercise_names  text[]       [not null, note: 'LLM 선택 프롬프트용 한글 종목명, 조인 없이 읽는다']
+  body            jsonb        [not null, note: 'exercises[{slug, exercise_name, thumbnail_url, order_index, sets[{order_index, reps, weight}]}]. 응답 조립 원본']
+  embedding       vector       [not null, note: 'vector(1024), cohere embed-v4, L2 정규화. ORDER BY embedding <=> query']
+  embedding_model text         [not null, note: '재임베딩 판별 태그']
+  source          text         [note: 'kaggle']
+  created_at      timestamptz  [not null, default: `now()`]
+  updated_at      timestamptz  [not null, default: `now()`]
+
+  indexes {
+    muscle_groups           [type: gin,   name: 'routines_muscle_gin',    note: '배열 교집합, 기피. 선택도 최상']
+    (level, minutes)        [type: btree, name: 'routines_level_minutes', note: '수준 상한, 시간 범위. GIN 비트맵과 AND']
+    (level, minutes)        [type: btree, name: 'routines_bodyweight',    note: 'WHERE bodyweight_only 부분 인덱스']
+    embedding               [type: hnsw,  name: 'routines_embedding_hnsw', note: '보류. 10만 건 초과 시 vector_cosine_ops 로 생성, hnsw.iterative_scan = relaxed_order 동반']
+  }
+}
+
+Table routine_exercises {
+  routine_id    integer  [not null, ref: > routines.id, note: 'ON DELETE CASCADE']
+  order_index   smallint [not null, note: '루틴 내 순서 0-based']
+  exercise_slug text     [not null, note: '백엔드 exercise.thumbnail_key 유도 slug. 다른 DB 라 FK 없음']
+  exercise_name text     [not null]
+
+  indexes {
+    (routine_id, order_index) [pk]
+    exercise_slug             [type: btree, name: 'routine_exercises_slug', note: '종목이 들어간 루틴 역조회']
+  }
+}
+
+Table routine_sets {
+  routine_id   integer  [not null]
+  order_index  smallint [not null, note: 'routine_exercises 의 순서']
+  set_index    smallint [not null]
+  reps         smallint
+  weight       numeric  [note: 'numeric(6,2). NULL 은 서빙 시 e1RM 으로 채움']
+  duration_sec smallint
+
+  indexes {
+    (routine_id, order_index, set_index) [pk]
+  }
+}
+
+Ref: routine_sets.(routine_id, order_index) > routine_exercises.(routine_id, order_index) [delete: cascade]
+```
+
+## 10. 인덱스 최적화 상태
+
+지금 상태는 "필터 인덱스는 완료, 벡터 인덱스는 의도적으로 없음"이다.
+
+| 구간 | 상태 | 근거 |
+|---|---|---|
+| 룰 필터 | 완료 | GIN 과 (level, minutes) 비트맵이 결합돼 필터 통과 행만 힙에서 읽는다. 600건 EXPLAIN 에서 1ms |
+| 코사인 정렬 | exact, 인덱스 없음 | 필터 후 남는 162~20,654건에 대해 1024차원 내적. 최악 2만 건도 수십 ms |
+| 벡터 인덱스 | 보류 | HNSW 는 필터 통과 행이 ef_search(기본 40)보다 적으면 30건을 못 채운다. 25k 규모에서 이득이 없다 |
+
+25,853건 전량에서 다시 EXPLAIN ANALYZE 해 봐야 확정된다. 확인할 값은 두 가지다.
+
+1. 필터 통과 2만 건 케이스(부위 넓게, 수준 advanced, 시간 범위 넓게)의 실행 시간. 100ms 를 넘기면 HNSW 를 켠다.
+2. `Heap Blocks` 대비 shared_buffers. t4g.micro 는 256MB 라 임베딩 105MB 를 포함한 테이블이 캐시에 다 안 올라갈 수 있고, 그러면 첫 요청 지연이 디스크 읽기에 좌우된다. `pg_prewarm` 또는 인스턴스 한 단계 상향으로 대응한다.
