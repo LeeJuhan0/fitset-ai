@@ -68,11 +68,6 @@ def _resource():
     )
 
 
-@lru_cache
-def get_routines_table():
-    """`routines` 테이블 핸들 (온디맨드, PK=slug)."""
-    return _resource().Table(get_settings().routines_table)
-
 
 @lru_cache
 def get_exercise_catalog_table():

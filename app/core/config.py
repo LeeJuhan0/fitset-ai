@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     # AWS
     aws_region: str = "ap-northeast-2"
 
-    # DynamoDB routines (변환 완료본 + 임베딩)
-    routines_table: str = "routines"
 
     # 종목 마스터 (206종, repo 동봉)
     exercise_metadata_path: str = "data/exercise-metadata.ko.json"

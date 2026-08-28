@@ -75,13 +75,13 @@
 2. **유저 컨텍스트**: 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
 3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
 4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
-5. **후보 생성**: 인메모리 루틴에서 **룰 필터 통과 전체**를 후보로. 메모리는 **라이트 로드**(부팅 시 Scan — 필터 필드·종목명 요약·임베딩만, 실측 ~350MB) — 세트 상세가 담긴 전체 루틴은 **최종 선택된 1건만 GetItem**으로 조회 (2026-07-25 리팩터, 1GB 태스크 가능). 룰 필터 확정 규칙 (2026-07-25):
+5. **후보 생성**: Postgres(pgvector) `routines`에 **룰 필터 5개를 WHERE 절로**(`routines/repository.search_statement`, 2026-08-28 전환). 응답 조립에 쓰는 세트 상세는 같은 행의 `body` JSONB라 추가 조회가 없다. 룰 필터 확정 규칙 (2026-07-25):
    - **부위(muscleGroups)**: 요청 부위와 루틴 `muscle_groups`의 **교집합이 있으면 통과** (`∩ ≠ ∅`)
    - **기피 부위(avoidBodyParts)**: 프로필 조회값 — 단 **요청 muscleGroups와 겹치는 부위는 클라 요청 우선**(기피에서 제외). 실효 기피 = `avoidBodyParts − muscleGroups`, 루틴 `muscle_groups`에 실효 기피 부위가 하나라도 포함되면 제외 (`null`/빈 배열이면 미적용)
    - **장비**: 최근 기록에서 **맨몸(bodyweight) 종목 비율 ≥ 70%면 홈트 유저로 판정 → `equipment ⊆ {bodyweight}` 루틴만** 후보. 그 미만(기록 없음 포함)은 **머신 보유 가정 → 장비 필터 없음**
    - **수준(level)**: 루틴 level ≤ 요청 level (수준 상한)
    - **시간(minutes)**: 루틴 `minutes_per_routine`이 요청 ±20% 이내 (제안 기본값 — 후보 부족 시 완화)
-6. **랭킹**: 유저 요청·컨텍스트를 "운동 루틴 묘사" 문장으로 변환(LLM) → 쿼리 임베딩(Bedrock `global.cohere.embed-v4:0`, 1024d, `input_type=search_query`) → 룰 필터 통과 **전체**와 코사인 유사도 전량 계산(인메모리 numpy) → **탑30** → 그중 **랜덤(또는 유사도 가중) 5개 샘플** → 탑5의 구성·묘사를 LLM에 제시해 **일등 1개 최종 선택**. 랜덤 샘플이 응답 다양성 담당. 요청당 Bedrock 호출 = 쿼리 변환 LLM 1회 + 쿼리 임베딩 1회 + 최종 선택 LLM 1회
+6. **랭킹**: 유저 요청·컨텍스트를 "운동 루틴 묘사" 문장으로 변환(LLM) → 쿼리 임베딩(Bedrock `global.cohere.embed-v4:0`, 1024d, `input_type=search_query`) → 같은 쿼리의 `ORDER BY embedding <=> query LIMIT 30`(pgvector exact 코사인) → **탑30** → 그중 **랜덤(또는 유사도 가중) 5개 샘플** → 탑5의 구성·묘사를 LLM에 제시해 **일등 1개 최종 선택**. 랜덤 샘플이 응답 다양성 담당. 요청당 Bedrock 호출 = 쿼리 변환 LLM 1회 + 쿼리 임베딩 1회 + 최종 선택 LLM 1회
 7. **응답 변환**: 4.1 스키마(slug·한글명·`thumbnailUrl`·weight 추천값 포함, `includeWarmup`이면 종목별 첫 세트 경량화)로 반환. 후보 0개면 `409 NO_ROUTINE_CANDIDATE`
 
 **폴백 규칙** (LLM 실패로 503을 내지 않기 위한 단계별 강등):

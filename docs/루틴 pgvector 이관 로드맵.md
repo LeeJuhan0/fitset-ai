@@ -26,7 +26,7 @@
 | 3 | ai-server | 검색 리포지토리. `domain.Routine` 엔티티 + `search_statement()` select 조립 + `search()`. 결과는 `(slug, exercise_names, body)` | `app/routines/repository.py` | 완료(2026-08-28). SQL 절 5개·바인딩·벡터 전달 테스트 4건, 로컬 컨테이너 500건에서 필터·정렬 확인 |
 | 4 | ai-server | 서비스 전환. `_filter_candidates`·numpy·`RoutineStore`·`passes_filters` 제거, `generate_routine` ④~⑦ 을 `repository.search` 호출로 교체, 기피 부위 재시도 유지 | `app/routines/service.py`, `app/main.py` | 완료(2026-08-28). 서비스 테스트 4건(기피 재시도, 후보 없음 409, LLM 폴백, 미설정 503), dev_local 은 검색 목으로 |
 | 5 | ai-server | 통합 테스트. CI 에 `pgvector/pgvector:pg17` 서비스 컨테이너, DDL 적용 후 픽스처 8건으로 필터·정렬·read-only 검증 | `.github/workflows/ci.yml`, `tests/test_routines_pg_integration.py` | 완료(2026-08-28). `PG_TEST_DSN` 없으면 skip, 있으면 6건. 로컬은 docker 컨테이너로 |
-| 6 | ai-server | 정리. `load_routines_dynamodb.py`·`reindex_routines.py`·`embed_routines.py` 의 DynamoDB 쓰기 경로를 Postgres 로 통일하거나 삭제, `routines_scan_limit` 설정 삭제, 문서 갱신 | `scripts/`, `docs/`, `CLAUDE.md` | DynamoDB `routines` 테이블 미참조 |
+| 6 | ai-server | 정리. `reindex_routines.py`(빈 파일)·`get_routines_table`·`routines_table` 설정 삭제, CLAUDE.md·document-structure·캐글 변환·코드 아키텍처 문서를 Postgres 기준으로 | `scripts/`, `app/core/`, `docs/`, `CLAUDE.md` | 완료(2026-08-28). 앱 코드에서 DynamoDB `routines` 미참조. 원천 배치(S3→DynamoDB→임베딩)는 7단계까지 유지하고 Postgres 적재는 `load_routines_postgres.py` 가 잇는다 |
 | 7 | 운영 | stage 검증 후 DynamoDB `routines` 테이블 삭제, prod 전환 시 Postgres prod 인스턴스 또는 stage 공유 결정 | AWS | stage 루틴 생성 정상 |
 
 ## 각 단계 설계 메모

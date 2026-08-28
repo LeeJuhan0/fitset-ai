@@ -1,9 +1,8 @@
 # AI 챗봇 데이터 설계 — ERD & JSON 규약
 
-저장소: **DynamoDB 온디맨드** (chat_threads, chat_messages, user_summaries, routines, exercise_catalog) — 2026-07-25 확정, 카탈로그는 2026-08-05 추가.
-루틴 파이프라인: **S3 원본 → 변환 배치 → DynamoDB `routines`(변환 완료본) → 부팅 시 Scan 전량 인메모리 로드**(~110MB).
-룰 필터 검색은 항상 인메모리 — DynamoDB `routines`는 부팅 로드 소스 + slug 단건 폴백(GetItem) 전용.
-벡터 검색은 제거 — 루틴 추천은 **룰 필터 + LLM 리랭킹**.
+저장소: **DynamoDB 온디맨드** (chat_threads, chat_messages, user_summaries, exercise_catalog) — 2026-07-25 확정, 카탈로그는 2026-08-05 추가.
+루틴은 **RDS Postgres pgvector**로 이관(2026-08-28, [루틴 저장소 pgvector](루틴%20저장소%20pgvector.md)). 파이프라인: **S3 원본 → 변환 배치 → DynamoDB `routines`(변환·임베딩 완료본) → `scripts/load_routines_postgres.py` → Postgres `routines`**. 서버는 Postgres만 읽고, DynamoDB `routines`는 적재 원천으로만 남아 있다가 이관 검증 후 삭제한다(로드맵 7단계).
+룰 필터와 코사인 상위 30은 Postgres 쿼리 1건 — 루틴 추천은 **룰 필터 + 코사인 + LLM 선택**.
 
 식별자 규약: ObjectId 대신 **ULID** (사전순 = 시간순 → SK 정렬 기준 겸용, "생성 시각 내장" 역할 대체).
 
@@ -91,13 +90,10 @@ Table routines {
   updated_at datetime [note: '변환 배치(S3 → DynamoDB) 적재 추적']
 
   Note: '''
-  루틴 — DynamoDB 테이블 (온디맨드). S3 원본을 변환 배치가 적재한 **변환 완료본**
-  - 서버 부팅 시 Scan으로 전량 인메모리 로드 (~110MB) → 룰 필터 검색은 항상 인메모리
-    (LLM 조건 추출 → 인메모리 룰 필터 → 룰 정렬 → 상위 N만 LLM 리랭킹 후 반환)
-  - 장비 필터: set(routine.equipment) ⊆ set(유저 보유 장비) — 인메모리 set 연산
-  - 인메모리 미스(재적재 후 신규 slug 등) 시 GetItem(slug) 폴백
-  - 경계: 다중 조건 필터를 DynamoDB 쿼리로 수행하지 않는다 — 이 테이블 역할은
-    부팅 로드 소스 + slug 단건 조회뿐
+  루틴 — DynamoDB 테이블 (온디맨드). S3 원본을 변환 배치가 적재한 **변환·임베딩 완료본**
+  - 2026-08-28부터 서버는 이 테이블을 읽지 않는다 — scripts/load_routines_postgres.py 가
+    Postgres pgvector routines 로 복사하고, 룰 필터·코사인은 거기서 쿼리 1건으로 수행
+  - 역할은 적재 원천뿐. 이관 검증(로드맵 7단계) 후 삭제 예정, terraform 에도 넣지 않았다
   - 갱신: 변환 배치가 멱등 upsert → 서버 재로드(배포 or 관리자 트리거), 그 사이는 GetItem 폴백이 커버
   '''
 }
@@ -233,4 +229,4 @@ payload는 항상 `null`. 유저 메시지는 항상 이 형태.
 2. 시각은 ISO 8601 문자열, 식별자는 ULID — 사전순 = 시간순이므로 Sort Key 정렬 기준 겸용 (ObjectId 내장 시각 대체)
 3. enum 어휘 강제는 Pydantic — DynamoDB는 검증하지 않는다
 4. 클라는 모르는 `response_scheme`/`chart_type` 무시 또는 텍스트 폴백 (전방 호환)
-5. 원본(S3)이 진실 — DynamoDB `routines`와 인메모리는 파생. 변환 배치가 DynamoDB를, 부팅 Scan이 인메모리를 동기화
+5. 원본(S3)이 진실 — DynamoDB `routines`와 Postgres `routines`는 파생. 변환 배치가 DynamoDB를, `load_routines_postgres.py`가 Postgres를 동기화
