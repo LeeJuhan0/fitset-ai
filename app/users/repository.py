@@ -9,9 +9,9 @@ from sqlalchemy import select
 
 from app.clients import mysql
 from app.core import clock
-from app.core.errors import UserNotFoundError
 from app.exercises.domain import Muscle
 from app.users.domain import BodyWeightHistory, UserAvoidedMuscle, UserProfile
+from app.users.exceptions import UserNotFoundError
 
 
 def get_profile(user_id: str) -> dict:
