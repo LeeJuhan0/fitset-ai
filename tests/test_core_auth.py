@@ -10,7 +10,7 @@ from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from app.core import auth
 from app.core.config import Settings
-from app.core.errors import DomainError, UnauthorizedError
+from app.core.exceptions import DomainError, UnauthorizedError
 
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _PUBLIC_PEM = _PRIVATE_KEY.public_key().public_bytes(
