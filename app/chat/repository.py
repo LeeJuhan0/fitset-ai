@@ -1,67 +1,54 @@
 """채팅 저장소 — DynamoDB 명령이 사는 유일한 곳 (docs/document-structure.md).
 
 chat_threads(PK=user_id, SK=thread_id) · chat_messages(PK=thread_id, SK=message_id) ·
-user_summaries(PK=user_id). 전 함수 동기 — async 서비스에서 asyncio.to_thread로 감싼다.
+user_summaries(PK=user_id). 모델은 domain의 PynamoDB 레코드 — 여기는 그 모델로 읽고 쓰기만 한다.
+전 함수 동기 — async 서비스에서 asyncio.to_thread로 감싼다.
 조합·판단은 하지 않는다(계층 규칙) — 정렬·만료 판정은 domain, 흐름은 service.
 
-`role`·`content`·`data` 등은 DynamoDB 예약어라 조회·갱신 표현식에서 항상
-ExpressionAttributeNames(#별칭)로 우회한다.
+`role`·`content`·`data` 등 DynamoDB 예약어의 #별칭 우회는 PynamoDB가 표현식을 만들며 알아서 한다.
 
 스레드 갱신은 전부 조건부 쓰기다 — UpdateItem은 기본이 upsert라, 조건 없이는
 삭제와 경쟁한 갱신(메시지 전송·백그라운드 요약)이 유령 스레드를 부활시킨다.
 """
 import logging
 
-from boto3.dynamodb.conditions import Key
+from pynamodb.exceptions import UpdateError
 
-from app.chat.domain import ThreadRecord
-from app.core.dynamo import (
-    get_chat_messages_table,
-    get_chat_threads_table,
-    get_user_summaries_table,
-    to_plain,
-    to_storable,
-)
+from app.chat.domain import MessageRecord, ThreadRecord, UserSummaryRecord
 
 logger = logging.getLogger("fitset")
 
 # 컨텍스트 로드용 투영 — payload는 화면 렌더링에만 쓰이므로 LLM 경로에서 뺀다
-_CONTEXT_FIELDS = ("message_id", "role", "content", "created_at")
+_CONTEXT_FIELDS = ["message_id", "role", "content", "created_at"]
 
 
-def _names(fields) -> dict:
-    """예약어 회피용 ExpressionAttributeNames 매핑."""
-    return {f"#{field}": field for field in fields}
+def _condition_failed(error: UpdateError) -> bool:
+    """조건부 쓰기의 조건 실패인지 — 그 외 갱신 오류는 호출부가 그대로 올린다."""
+    return error.cause_response_code == "ConditionalCheckFailedException"
 
 
 def list_threads(user_id: str) -> list[ThreadRecord]:
     """유저의 전체 스레드 — 최대 10개라 정렬·만료 필터는 메모리에서 한다(GSI 불필요)."""
-    response = get_chat_threads_table().query(
-        KeyConditionExpression=Key("user_id").eq(user_id)
-    )
-    return [ThreadRecord.from_item(to_plain(item)) for item in response.get("Items", [])]
+    return list(ThreadRecord.query(user_id))
 
 
 def get_thread(user_id: str, thread_id: str) -> ThreadRecord | None:
     """스레드 단건. PK가 (user_id, thread_id)라 남의 스레드는 애초에 조회되지 않는다."""
-    item = get_chat_threads_table().get_item(
-        Key={"user_id": user_id, "thread_id": thread_id},
+    try:
         # 생성(201) 직후 바로 온 전송이 EC 읽기로 404 나지 않게 — 단건이라 비용 무시 가능
-        ConsistentRead=True,
-    ).get("Item")
-    if item is None:
+        return ThreadRecord.get(user_id, thread_id, consistent_read=True)
+    except ThreadRecord.DoesNotExist:
         return None
-    return ThreadRecord.from_item(to_plain(item))
 
 
 def put_thread(record: ThreadRecord) -> None:
-    """스레드 신규 생성 — sparse 저장 규칙(None 필드 제외)은 레코드 to_item이 안다."""
-    get_chat_threads_table().put_item(Item=to_storable(record.to_item()))
+    """스레드 신규 생성 — None 필드는 모델이 속성째 빼고 sparse로 저장한다."""
+    record.save()
 
 
 def delete_thread(user_id: str, thread_id: str) -> None:
     """스레드 항목만 삭제 — 소속 메시지는 delete_messages가 따로 지운다."""
-    get_chat_threads_table().delete_item(Key={"user_id": user_id, "thread_id": thread_id})
+    ThreadRecord(user_id, thread_id).delete()
 
 
 def touch_thread(
@@ -77,23 +64,20 @@ def touch_thread(
     touch가 upsert로 유령 스레드를 부활시키므로 막는다.
     title은 if_not_exists — 첫 메시지 2건이 경쟁해도 먼저 정해진 제목이 이긴다.
     """
-    names = {"#last_message_at": "last_message_at", "#expires_at": "expires_at"}
-    sets = ["#last_message_at = :last_message_at", "#expires_at = :expires_at"]
-    values = {":last_message_at": last_message_at, ":expires_at": expires_at}
+    actions = [
+        ThreadRecord.last_message_at.set(last_message_at),
+        ThreadRecord.expires_at.set(expires_at),
+    ]
     if title is not None:
-        names["#title"] = "title"
-        sets.append("#title = if_not_exists(#title, :title)")
-        values[":title"] = title
-    table = get_chat_threads_table()
+        # 속성 | 값 은 PynamoDB의 if_not_exists 표기다
+        actions.append(ThreadRecord.title.set(ThreadRecord.title | title))
     try:
-        table.update_item(
-            Key={"user_id": user_id, "thread_id": thread_id},
-            UpdateExpression="SET " + ", ".join(sets),
-            ConditionExpression="attribute_exists(thread_id)",
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
+        ThreadRecord(user_id, thread_id).update(
+            actions=actions, condition=ThreadRecord.thread_id.exists()
         )
-    except table.meta.client.exceptions.ConditionalCheckFailedException:
+    except UpdateError as error:
+        if not _condition_failed(error):
+            raise
         logger.info("touch skipped, thread already deleted: %s", thread_id)
 
 
@@ -101,29 +85,28 @@ def save_summary(user_id: str, thread_id: str, summary_text: str, summary_upto: 
     """스레드 압축 요약과 반영 지점(ULID)을 갱신한다 — 백그라운드 요약 경로.
 
     조건 두 가지: 스레드가 살아있고(upsert 부활 방지), summary_upto가 전진할 때만.
-    NOT(#u >= :u)은 속성 부재면 참이라 첫 요약도 통과하고, 늦게 끝난 묵은
+    NOT(summary_upto >= 새 값)은 속성 부재면 참이라 첫 요약도 통과하고, 늦게 끝난 묵은
     태스크(Lost Update·역행)는 조건 실패로 버려진다.
     """
-    fields = ["summary_text", "summary_upto"]
-    table = get_chat_threads_table()
     try:
-        table.update_item(
-            Key={"user_id": user_id, "thread_id": thread_id},
-            UpdateExpression="SET #summary_text = :summary_text, #summary_upto = :summary_upto",
-            ConditionExpression=(
-                "attribute_exists(thread_id) AND NOT (#summary_upto >= :summary_upto)"
+        ThreadRecord(user_id, thread_id).update(
+            actions=[
+                ThreadRecord.summary_text.set(summary_text),
+                ThreadRecord.summary_upto.set(summary_upto),
+            ],
+            condition=(
+                ThreadRecord.thread_id.exists() & ~(ThreadRecord.summary_upto >= summary_upto)
             ),
-            ExpressionAttributeNames=_names(fields),
-            ExpressionAttributeValues={
-                ":summary_text": summary_text,
-                ":summary_upto": summary_upto,
-            },
         )
-    except table.meta.client.exceptions.ConditionalCheckFailedException:
+    except UpdateError as error:
+        if not _condition_failed(error):
+            raise
         logger.info("summary skipped, thread deleted or stale upto: %s", thread_id)
 
 
-def messages_page(thread_id: str, limit: int, cursor: str | None = None) -> tuple[list[dict], str | None]:
+def messages_page(
+    thread_id: str, limit: int, cursor: str | None = None
+) -> tuple[list[MessageRecord], str | None]:
     """최신부터 limit개 — 과거 방향 커서 페이지 (클라이언트 API 명세 §4.5).
 
     (시간 오름차순 페이지, next_cursor)를 돌려준다. 커서는 message_id(ULID)를
@@ -132,58 +115,58 @@ def messages_page(thread_id: str, limit: int, cursor: str | None = None) -> tupl
     Limit에 정확히 걸려 끝나면 커서가 한 번 더 올 수 있는데, 다음 요청이
     빈 페이지 + None으로 끝나므로 계약(§4.5)을 깨지 않는다.
     """
-    kwargs = {
-        "KeyConditionExpression": Key("thread_id").eq(thread_id),
-        "ScanIndexForward": False,
-        "Limit": limit,
-    }
+    start_key = None
     if cursor is not None:
-        kwargs["ExclusiveStartKey"] = {"thread_id": thread_id, "message_id": cursor}
-    response = get_chat_messages_table().query(**kwargs)
-    items = [to_plain(item) for item in reversed(response.get("Items", []))]
-    next_cursor = response.get("LastEvaluatedKey", {}).get("message_id")
+        start_key = {"thread_id": {"S": thread_id}, "message_id": {"S": cursor}}
+    # page_size를 limit과 맞춰 Query 1회로 끝낸다 — 기본값이면 1MB까지 읽고 버린다
+    result = MessageRecord.query(
+        thread_id,
+        scan_index_forward=False,
+        limit=limit,
+        page_size=limit,
+        last_evaluated_key=start_key,
+    )
+    items = list(reversed(list(result)))
+    last_key = result.last_evaluated_key or {}
+    next_cursor = last_key.get("message_id", {}).get("S")
     return items, next_cursor
 
 
-def recent_messages(thread_id: str, limit: int) -> list[dict]:
+def recent_messages(thread_id: str, limit: int) -> list[MessageRecord]:
     """LLM 컨텍스트용 최근 N턴 — payload 제외 투영, 역순 조회 후 뒤집어 시간순으로 돌려준다."""
-    response = get_chat_messages_table().query(
-        KeyConditionExpression=Key("thread_id").eq(thread_id),
-        ScanIndexForward=False,
-        Limit=limit,
-        ProjectionExpression=", ".join(f"#{field}" for field in _CONTEXT_FIELDS),
-        ExpressionAttributeNames=_names(_CONTEXT_FIELDS),
+    result = MessageRecord.query(
+        thread_id,
+        scan_index_forward=False,
+        limit=limit,
+        page_size=limit,
+        attributes_to_get=_CONTEXT_FIELDS,
     )
-    return [to_plain(item) for item in reversed(response.get("Items", []))]
+    return list(reversed(list(result)))
 
 
-def put_message(item: dict) -> None:
+def put_message(message: MessageRecord) -> None:
     """메시지 1건 저장."""
-    get_chat_messages_table().put_item(Item=to_storable(item))
+    message.save()
 
 
-def messages_after(thread_id: str, summary_upto: str | None) -> list[dict]:
-    """summary_upto 이후 메시지 — 재요약 입력. role·content만 투영, 시간순.
+def messages_after(thread_id: str, summary_upto: str | None) -> list[MessageRecord]:
+    """summary_upto 이후 메시지 — 재요약 입력. payload 제외 투영, 시간순.
 
     전체 대화가 아니라 미요약 꼬리만 읽는다 — 재요약은 (기존 summary_text + 신규 메시지)의
     증분 병합이다(document-structure). 전체를 실으면 프롬프트가 대화 길이에 비례해 커진다.
+    1MB 상한에 잘린 페이지는 PynamoDB 이터레이터가 이어읽는다.
     """
-    condition = Key("thread_id").eq(thread_id)
+    condition = None
     if summary_upto is not None:
-        condition = condition & Key("message_id").gt(summary_upto)
-    items: list[dict] = []
-    kwargs = {
-        "KeyConditionExpression": condition,
-        "ScanIndexForward": True,
-        "ProjectionExpression": ", ".join(f"#{field}" for field in _CONTEXT_FIELDS),
-        "ExpressionAttributeNames": _names(_CONTEXT_FIELDS),
-    }
-    while True:
-        response = get_chat_messages_table().query(**kwargs)
-        items.extend(to_plain(item) for item in response.get("Items", []))
-        if "LastEvaluatedKey" not in response:
-            return items
-        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        condition = MessageRecord.message_id > summary_upto
+    return list(
+        MessageRecord.query(
+            thread_id,
+            range_key_condition=condition,
+            scan_index_forward=True,
+            attributes_to_get=_CONTEXT_FIELDS,
+        )
+    )
 
 
 def count_messages(thread_id: str, after: str | None) -> int:
@@ -191,70 +174,42 @@ def count_messages(thread_id: str, after: str | None) -> int:
 
     상한 검사(after=None)와 요약 임계 검사(after=summary_upto)가 함께 쓴다.
     매 전송마다 돌므로 파티션 전체를 읽지 않고, ULID 범위 조건으로 스캔 구간도 좁힌다.
+    1MB 스캔 상한에 잘려도 PynamoDB count가 끝까지 이어 센다.
     """
-    condition = Key("thread_id").eq(thread_id)
+    condition = None
     if after is not None:
-        condition = condition & Key("message_id").gt(after)
-    total = 0
-    kwargs = {"KeyConditionExpression": condition, "Select": "COUNT"}
-    while True:
-        response = get_chat_messages_table().query(**kwargs)
-        total += response.get("Count", 0)
-        if "LastEvaluatedKey" not in response:
-            return total
-        # DynamoDB 1MB 스캔 상한에 잘리면 오는 책갈피 — 이 키 다음부터 이어읽는다
-        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        condition = MessageRecord.message_id > after
+    return MessageRecord.count(thread_id, range_key_condition=condition)
 
 
 def delete_messages(thread_id: str) -> None:
     """스레드 소속 메시지 전량 삭제 — 키만 조회해 배치로 지운다.
 
-    batch_writer가 25개 flush와 UnprocessedItems 재시도를 알아서 하므로
+    batch_write가 25개 flush와 UnprocessedItems 재시도를 알아서 하므로
     수동 청크를 두지 않는다.
     """
-    table = get_chat_messages_table()
-    kwargs = {
-        "KeyConditionExpression": Key("thread_id").eq(thread_id),
-        "ProjectionExpression": "thread_id, message_id",
-    }
-    keys: list[dict] = []
-    while True:
-        response = table.query(**kwargs)
-        keys.extend(
-            {"thread_id": item["thread_id"], "message_id": item["message_id"]}
-            for item in response.get("Items", [])
-        )
-        if "LastEvaluatedKey" not in response:
-            break
-        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-
-    with table.batch_writer() as batch:
+    keys = list(MessageRecord.query(thread_id, attributes_to_get=["thread_id", "message_id"]))
+    with MessageRecord.batch_write() as batch:
         for key in keys:
-            batch.delete_item(Key=key)
+            batch.delete(key)
     return None
 
 
 def get_user_summary(user_id: str) -> str | None:
     """유저 장기 요약 — 매 요청 GetItem 단건, 시스템 프롬프트에 주입한다."""
-    item = get_user_summaries_table().get_item(Key={"user_id": user_id}).get("Item")
-    if item is None:
+    try:
+        return UserSummaryRecord.get(user_id).summary_text
+    except UserSummaryRecord.DoesNotExist:
         return None
-    return item.get("summary_text")
 
 
 def save_user_summary(user_id: str, summary_text: str, updated_at: str) -> None:
     """유저 장기 요약 갱신 — TTL 없는 영속 항목이라 upsert만 한다."""
-    fields = ["summary_text", "updated_at", "created_at"]
-    get_user_summaries_table().update_item(
-        Key={"user_id": user_id},
-        # created_at은 최초 1회만 — if_not_exists로 덮어쓰지 않는다
-        UpdateExpression=(
-            "SET #summary_text = :summary_text, #updated_at = :updated_at, "
-            "#created_at = if_not_exists(#created_at, :updated_at)"
-        ),
-        ExpressionAttributeNames=_names(fields),
-        ExpressionAttributeValues={
-            ":summary_text": summary_text,
-            ":updated_at": updated_at,
-        },
+    UserSummaryRecord(user_id).update(
+        actions=[
+            UserSummaryRecord.summary_text.set(summary_text),
+            UserSummaryRecord.updated_at.set(updated_at),
+            # created_at은 최초 1회만 — if_not_exists로 덮어쓰지 않는다
+            UserSummaryRecord.created_at.set(UserSummaryRecord.created_at | updated_at),
+        ]
     )
