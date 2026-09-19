@@ -50,7 +50,7 @@ def test_thread_record_open_sets_ttl_and_sparse_item():
     record = domain.ThreadRecord.open("u", NOW, 14)
     assert record.expires_at == domain.ttl_epoch(NOW, 14)
     assert record.created_at == "2026-07-29T12:00:00Z"
-    item = record.to_item()
+    item = record.serialize()
     assert "title" not in item
     assert "summary_upto" not in item
 
@@ -98,28 +98,30 @@ def test_fallback_title_truncates_and_collapses_whitespace():
 
 def test_to_message_view_nulls_scheme_and_payload_for_user():
     # §7 계약 — user 메시지는 responseScheme·payload가 항상 null
-    stored = {
-        "message_id": "M1",
-        "role": "user",
-        "content": "안녕",
-        "response_scheme": "chart",
-        "payload": {"x": []},
-        "created_at": "2026-07-29T12:00:00Z",
-    }
+    stored = domain.MessageRecord(
+        thread_id="T",
+        message_id="M1",
+        role="user",
+        content="안녕",
+        response_scheme="chart",
+        payload={"x": []},
+        created_at="2026-07-29T12:00:00Z",
+    )
     view = domain.to_message_view(stored)
     assert view["response_scheme"] is None
     assert view["payload"] is None
 
 
 def test_to_message_view_keeps_assistant_payload():
-    stored = {
-        "message_id": "M2",
-        "role": "assistant",
-        "content": "차트예요",
-        "response_scheme": "chart",
-        "payload": {"x": ["7/1"]},
-        "created_at": "2026-07-29T12:00:00Z",
-    }
+    stored = domain.MessageRecord(
+        thread_id="T",
+        message_id="M2",
+        role="assistant",
+        content="차트예요",
+        response_scheme="chart",
+        payload={"x": ["7/1"]},
+        created_at="2026-07-29T12:00:00Z",
+    )
     view = domain.to_message_view(stored)
     assert view["response_scheme"] == "chart"
     assert view["payload"] == {"x": ["7/1"]}
