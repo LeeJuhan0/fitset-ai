@@ -1,4 +1,4 @@
-"""DynamoDB 커넥션 — boto3 리소스 핸들과 타입 변환. core 레이어.
+"""DynamoDB 커넥션 — PynamoDB 모델이 공유하는 접속 설정. core 레이어.
 
 DynamoDB 저장 구조는 2단이다 — B+tree 단일 트리가 아니다:
   ① 파티션 키를 해시해서 어느 물리 파티션(서버)인지 O(1)로 결정 → 그래서 = 조건만 가능
@@ -20,74 +20,44 @@ MySQL과의 차이는 트리 유무가 아니라, 트리가 파티션 단위로 
 LSI(같은 파티션 키 + 다른 정렬 키, 테이블 생성 시에만)가 필요 — FilterExpression은
 읽은 뒤 버리는 것이라 스캔량만큼 과금되는 가짜 최적화다.
 
-put_item·query 등은 boto3 메서드지만 와이어는 전부 RPC-over-HTTP — REST GET/PUT/DELETE 동사 없이
+save·query 등은 PynamoDB 메서드지만 와이어는 전부 RPC-over-HTTP — REST GET/PUT/DELETE 동사 없이
 항상 POST / 에 X-Amz-Target 헤더로 연산명을 싣는다. DynamoDB_20120810.PutItem 같은 헤더로 
-"어떤 연산인지"를 담고 본문은 JSON 입력, 서명(SigV4) 재시도는 boto3 담당.
-"""
-import json
-from decimal import Decimal
-from functools import lru_cache
+"어떤 연산인지"를 담고 본문은 JSON 입력, 서명(SigV4)은 botocore, 재시도는 PynamoDB 담당.
 
-import boto3
-from botocore.config import Config
+모델(ODM)은 각 도메인 패키지 domain.py가 소유한다 — 여기는 공통 베이스와 부팅 바인딩만 둔다.
+타입 변환(Decimal 등)은 PynamoDB 속성이 하므로 별도 변환 함수가 없다.
+"""
+from pynamodb.models import Model
 
 from app.core.config import get_settings
 
 
-def to_plain(value):
-    """boto3 리소스 타입(Decimal 등) → 순수 파이썬 값 재귀 변환."""
-    if isinstance(value, Decimal):
-        return int(value) if value % 1 == 0 else float(value)
-    if isinstance(value, list):
-        return [to_plain(v) for v in value]
-    if isinstance(value, dict):
-        return {k: to_plain(v) for k, v in value.items()}
-    return value
+class DynamoModel(Model):
+    """DynamoDB 모델 공통 베이스 — 하위 모델은 Meta.table_name에 논리 이름만 적는다.
+
+    실제 테이블명과 접속 설정은 bind_tables가 부팅 때 설정값으로 채운다 — 모델 선언이
+    import 시점에 설정을 읽지 않게 하기 위해서다.
+    """
 
 
-def to_storable(value):
-    """저장용 변환 — DynamoDB 리소스 API는 float를 거부하므로 Decimal로 바꾼다."""
-    return json.loads(json.dumps(value), parse_float=Decimal)
+def bind_tables() -> None:
+    """모든 모델에 환경별 테이블명과 접속 설정을 건다 — 부팅·스크립트·테스트 시작 때 1회.
 
-
-@lru_cache
-def _resource():
-    """테이블 핸들이 공유하는 boto3 리소스 — 타임아웃·재시도·커넥션 풀 설정을 한곳에 둔다."""
+    논리 이름 X의 실제 테이블명은 설정 필드 X_table이다 (예: chat_threads → chat_threads_table).
+    캐시된 커넥션도 비워 다음 호출이 새 설정으로 접속하게 한다.
+    """
     settings = get_settings()
-    return boto3.resource(
-        "dynamodb",
-        region_name=settings.aws_region,
-        config=Config(
-            retries={"max_attempts": settings.dynamo_max_attempts, "mode": "standard"},
-            # 호출 1회의 스레드 점유 상한 — 기본 read 60s면 클라가 끊은 뒤에도 스레드가 물린다
-            connect_timeout=settings.dynamo_connect_timeout,
-            read_timeout=settings.dynamo_read_timeout,
-            # 기본 풀은 10이라 executor 스레드보다 작다 — 스레드 수와 맞춘다
-            max_pool_connections=settings.executor_max_workers,
-        ),
-    )
-
-
-
-@lru_cache
-def get_exercise_catalog_table():
-    """`exercise_catalog` 테이블 핸들 (PK=slug — 백엔드 종목 마스터 캐시, 일 1회 배치 갱신)."""
-    return _resource().Table(get_settings().exercise_catalog_table)
-
-
-@lru_cache
-def get_chat_threads_table():
-    """`chat_threads` 테이블 핸들 (PK=user_id, SK=thread_id, TTL 속성=expires_at)."""
-    return _resource().Table(get_settings().chat_threads_table)
-
-
-@lru_cache
-def get_chat_messages_table():
-    """`chat_messages` 테이블 핸들 (PK=thread_id, SK=message_id)."""
-    return _resource().Table(get_settings().chat_messages_table)
-
-
-@lru_cache
-def get_user_summaries_table():
-    """`user_summaries` 테이블 핸들 (PK=user_id, TTL 없음 — 영속)."""
-    return _resource().Table(get_settings().user_summaries_table)
+    for model in DynamoModel.__subclasses__():
+        meta = model.Meta
+        # 재호출에도 같은 필드를 찾도록 논리 이름을 따로 보관한다
+        if not hasattr(meta, "logical_name"):
+            meta.logical_name = meta.table_name
+        meta.table_name = getattr(settings, f"{meta.logical_name}_table")
+        meta.region = settings.aws_region
+        # 호출 1회의 스레드 점유 상한 — 기본 read 60s면 클라가 끊은 뒤에도 스레드가 물린다
+        meta.connect_timeout_seconds = settings.dynamo_connect_timeout
+        meta.read_timeout_seconds = settings.dynamo_read_timeout
+        meta.max_retry_attempts = settings.dynamo_max_attempts
+        # 기본 풀은 10이라 executor 스레드보다 작다 — 스레드 수와 맞춘다
+        meta.max_pool_connections = settings.executor_max_workers
+        model._connection = None
