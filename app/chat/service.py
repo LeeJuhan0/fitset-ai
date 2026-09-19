@@ -13,6 +13,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent import graph, prompts
 from app.chat import domain, repository
+from app.chat.exceptions import (
+    ThreadExpiredError,
+    ThreadFullError,
+    ThreadNotFoundError,
+    ThreadQuotaExceededError,
+)
 from app.chat.schemas import (
     MessageOut,
     MessagePageData,
@@ -23,15 +29,7 @@ from app.chat.schemas import (
 )
 from app.core import clock, llm, ratelimit
 from app.core.config import get_settings
-from app.core.errors import (
-    AiUnavailableError,
-    DomainError,
-    RateLimitedError,
-    ThreadExpiredError,
-    ThreadFullError,
-    ThreadNotFoundError,
-    ThreadQuotaExceededError,
-)
+from app.core.exceptions import AiUnavailableError, DomainError, RateLimitedError
 
 logger = logging.getLogger("fitset")
 
@@ -246,11 +244,9 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
     transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in fresh)
     system, user = prompts.summarize_thread(thread.summary_text, transcript)
-    try:
-        summary_text = await asyncio.to_thread(llm.complete, system, user, 600)
-    except Exception:
+    summary_text = await asyncio.to_thread(llm.try_complete, "thread summary", system, user, 600)
+    if summary_text is None:
         # 요약 실패는 대화를 막지 않는다 — 다음 턴에 다시 시도된다
-        logger.warning("thread summary failed: %s", thread_id, exc_info=True)
         return None
 
     summary_text = summary_text.strip()
@@ -260,10 +256,8 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
     previous = await asyncio.to_thread(repository.get_user_summary, user_id)
     system, user = prompts.summarize_user(previous, summary_text)
-    try:
-        merged = await asyncio.to_thread(llm.complete, system, user, 500)
-    except Exception:
-        logger.warning("user summary failed: %s", user_id, exc_info=True)
+    merged = await asyncio.to_thread(llm.try_complete, "user summary", system, user, 500)
+    if merged is None:
         return None
     await asyncio.to_thread(
         repository.save_user_summary, user_id, merged.strip(), clock.iso_utc(clock.now_utc())
@@ -306,10 +300,8 @@ async def _make_title(first_message: str) -> str:
     """첫 발화 → 스레드 제목. LLM 실패 시 앞 N자로 폴백한다."""
     settings = get_settings()
     system, user = prompts.make_title(first_message)
-    try:
-        title = await asyncio.to_thread(llm.complete, system, user, 40)
-    except Exception:
-        logger.warning("title LLM failed, falling back to prefix", exc_info=True)
+    title = await asyncio.to_thread(llm.try_complete, "title", system, user, 40)
+    if title is None:
         return domain.fallback_title(first_message, settings.chat_title_max_length)
     title = title.strip().strip('"')
     if not title:
