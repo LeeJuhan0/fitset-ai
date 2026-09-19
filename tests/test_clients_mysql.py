@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import create_engine, select
 
 from app.clients import mysql
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 from app.exercises.domain import Exercise
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
