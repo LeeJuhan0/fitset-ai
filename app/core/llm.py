@@ -4,12 +4,15 @@
 임베딩 모델은 global.cohere.embed-v4:0 고정 (모델 교체 시 전량 재임베딩 필수 — CLAUDE.md).
 """
 import json
+import logging
 from functools import lru_cache
 
 import boto3
 from botocore.config import Config
 
 from app.core.config import get_settings
+
+logger = logging.getLogger("fitset")
 
 
 @lru_cache
@@ -63,6 +66,18 @@ def complete(system: str, user: str, max_tokens: int | None = None) -> str:
     return response["output"]["message"]["content"][0]["text"]
 
 
+def try_complete(purpose: str, system: str, user: str, max_tokens: int | None = None) -> str | None:
+    """complete의 폴백용 변형 — 실패하면 원인을 로그에 남기고 None을 돌려준다.
+
+    폴백이 있는 호출부가 try 없이 가드 절(if 결과 is None)로 강등 경로를 타게 한다.
+    """
+    try:
+        return complete(system, user, max_tokens)
+    except Exception:
+        logger.warning("%s LLM failed, falling back", purpose, exc_info=True)
+        return None
+
+
 def embed_query(text: str) -> list[float]:
     """쿼리 1건 임베딩 — input_type=search_query (문서 임베딩과 짝을 이루는 검색용)."""
     settings = get_settings()
@@ -74,3 +89,12 @@ def embed_query(text: str) -> list[float]:
     }
     response = _runtime().invoke_model(modelId=settings.embed_model_id, body=json.dumps(body))
     return json.loads(response["body"].read())["embeddings"]["float"][0]
+
+
+def try_embed_query(text: str) -> list[float] | None:
+    """embed_query의 폴백용 변형 — 실패하면 원인을 로그에 남기고 None을 돌려준다."""
+    try:
+        return embed_query(text)
+    except Exception:
+        logger.exception("query embedding failed")
+        return None
