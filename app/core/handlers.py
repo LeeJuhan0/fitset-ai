@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 
 logger = logging.getLogger("fitset")
 
