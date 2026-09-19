@@ -1,16 +1,17 @@
-"""채팅 도메인 순수 로직 — I/O 없는 함수·상수·레코드만.
+"""채팅 도메인 — DynamoDB 모델(PynamoDB)과 I/O 없는 함수·상수.
 
 ULID 생성, TTL 계산, 스레드 레코드(만료 판정 포함), 요약 시점 판정을 모은다.
-계산만 하고 읽기·쓰기는 repository가 담당한다 (계층 규칙).
+모델은 저장 형태의 선언일 뿐이다 — 읽기·쓰기 호출은 repository가 담당한다 (계층 규칙).
 """
 import os
 import threading
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pynamodb.attributes import MapAttribute, NumberAttribute, UnicodeAttribute
 
 from app.core.clock import iso_utc, now_utc
+from app.core.dynamo import DynamoModel
 
 
 class StreamKind(StrEnum):
@@ -75,21 +76,25 @@ def ttl_epoch(last_message_at: datetime, days: int) -> int:
     return int((last_message_at + timedelta(days=days)).timestamp())
 
 
-class ThreadRecord(BaseModel):
+class ThreadRecord(DynamoModel):
     """chat_threads 아이템 1건 — 저장 형태의 정본 (document-structure.md와 1:1).
 
-    service↔repository 사이의 계약을 dict 대신 타입으로 강제한다 — 키 오타·필드 누락은
-    생성 시점에, 저장 아이템의 타입 어긋남은 from_item에서 즉시 잡힌다.
+    PK=user_id, SK=thread_id, TTL 속성=expires_at. None 필드는 속성 자체를 빼 sparse로
+    저장된다 — NULL 타입으로 저장하면 if_not_exists가 NULL을 '있는 값'으로 보고 title을
+    영영 채우지 못한다. 읽는 쪽은 전부 null 허용이라 부재와 null이 동치다.
     """
 
-    user_id: str
-    thread_id: str
-    title: str | None = None
-    summary_text: str | None = None
-    summary_upto: str | None = None
-    last_message_at: str | None = None
-    expires_at: int | None = None
-    created_at: str
+    class Meta:
+        table_name = "chat_threads"
+
+    user_id = UnicodeAttribute(hash_key=True)
+    thread_id = UnicodeAttribute(range_key=True)
+    title = UnicodeAttribute(null=True)
+    summary_text = UnicodeAttribute(null=True)
+    summary_upto = UnicodeAttribute(null=True)
+    last_message_at = UnicodeAttribute(null=True)
+    expires_at = NumberAttribute(null=True)
+    created_at = UnicodeAttribute()
 
     @classmethod
     def open(cls, user_id: str, now: datetime, ttl_days: int) -> "ThreadRecord":
@@ -101,19 +106,6 @@ class ThreadRecord(BaseModel):
             created_at=iso_utc(now),
         )
 
-    @classmethod
-    def from_item(cls, item: dict) -> "ThreadRecord":
-        """DynamoDB 아이템 → 레코드 — 스키마 드리프트를 읽는 즉시 드러낸다."""
-        return cls.model_validate(item)
-
-    def to_item(self) -> dict:
-        """저장용 dict — None 필드는 속성 자체를 빼 sparse로 저장한다.
-
-        NULL 타입으로 저장하면 if_not_exists가 NULL을 '있는 값'으로 보고 title을
-        영영 채우지 못한다. 읽는 쪽은 전부 기본값 필드라 부재와 null이 동치다.
-        """
-        return self.model_dump(exclude_none=True)
-
     def is_expired(self, now: datetime) -> bool:
         """만료 판정 — 메시지 보존 기한(마지막 활동 + 14일) 경과.
 
@@ -123,6 +115,37 @@ class ThreadRecord(BaseModel):
         if self.expires_at is None:
             return False
         return self.expires_at <= int(now.timestamp())
+
+
+class MessageRecord(DynamoModel):
+    """chat_messages 아이템 1건 — PK=thread_id, SK=message_id(ULID, 사전순=시간순).
+
+    payload는 response_scheme별 자유 구조라 스키마 없는 맵으로 둔다 (document-structure §2).
+    """
+
+    class Meta:
+        table_name = "chat_messages"
+
+    thread_id = UnicodeAttribute(hash_key=True)
+    message_id = UnicodeAttribute(range_key=True)
+    user_id = UnicodeAttribute(null=True)
+    role = UnicodeAttribute()
+    content = UnicodeAttribute(null=True)
+    response_scheme = UnicodeAttribute(null=True)
+    payload = MapAttribute(null=True)
+    created_at = UnicodeAttribute(null=True)
+
+
+class UserSummaryRecord(DynamoModel):
+    """user_summaries 아이템 1건 — PK=user_id, TTL 없는 영속 항목."""
+
+    class Meta:
+        table_name = "user_summaries"
+
+    user_id = UnicodeAttribute(hash_key=True)
+    summary_text = UnicodeAttribute(null=True)
+    updated_at = UnicodeAttribute(null=True)
+    created_at = UnicodeAttribute(null=True)
 
 
 def _activity_key(thread: ThreadRecord) -> tuple[str, str]:
@@ -153,14 +176,21 @@ def needs_summary(count: int, threshold: int) -> bool:
     return count >= threshold
 
 
-def to_message_view(item: dict) -> dict:
+def _payload_dict(payload) -> dict | None:
+    """payload 맵 → 순수 dict. 모델은 대입·조회 모두 MapAttribute로 들고 있다."""
+    if isinstance(payload, MapAttribute):
+        return payload.as_dict()
+    return payload
+
+
+def to_message_view(message: MessageRecord) -> dict:
     """저장 항목 → 응답용 dict. user 메시지는 §7 계약대로 scheme·payload를 null로 강제한다."""
-    is_user = item.get("role") == "user"
+    is_user = message.role == "user"
     return {
-        "message_id": item["message_id"],
-        "role": item["role"],
-        "content": item.get("content", ""),
-        "response_scheme": None if is_user else item.get("response_scheme"),
-        "payload": None if is_user else item.get("payload"),
-        "created_at": item.get("created_at", ""),
+        "message_id": message.message_id,
+        "role": message.role,
+        "content": message.content or "",
+        "response_scheme": None if is_user else message.response_scheme,
+        "payload": None if is_user else _payload_dict(message.payload),
+        "created_at": message.created_at or "",
     }
