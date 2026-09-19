@@ -17,7 +17,7 @@ from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from app.core.config import get_settings
-from app.core.errors import DomainError, UnauthorizedError
+from app.core.exceptions import DomainError, UnauthorizedError
 
 logger = logging.getLogger("fitset")
 
