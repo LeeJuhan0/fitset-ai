@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import expression
 
 from app.core.config import get_settings
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 
 
 class seconds_between(expression.FunctionElement):
