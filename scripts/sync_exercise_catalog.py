@@ -20,12 +20,13 @@ import json
 import sys
 from pathlib import Path
 
-import boto3
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.core import dynamo  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
+from app.exercises.domain import CatalogEntry  # noqa: E402
 
 
 def fetch_backend_catalog(url: str, timeout: float) -> dict[str, dict]:
@@ -76,28 +77,22 @@ def build_items(backend: dict[str, dict], slugs: set[str]) -> list[dict]:
     return items
 
 
-def create_table(table_name: str, region: str) -> None:
+def create_table() -> None:
     """카탈로그 테이블 생성 (PK=slug, 온디맨드). 이미 있으면 조용히 넘어간다."""
-    client = boto3.client("dynamodb", region_name=region)
-    try:
-        client.create_table(
-            TableName=table_name,
-            KeySchema=[{"AttributeName": "slug", "KeyType": "HASH"}],
-            AttributeDefinitions=[{"AttributeName": "slug", "AttributeType": "S"}],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        client.get_waiter("table_exists").wait(TableName=table_name)
-        print(f"테이블 생성 완료: {table_name}")
-    except client.exceptions.ResourceInUseException:
+    table_name = CatalogEntry.Meta.table_name
+    if CatalogEntry.exists():
         print(f"테이블 이미 존재: {table_name}")
+        return None
+    CatalogEntry.create_table(billing_mode="PAY_PER_REQUEST", wait=True)
+    print(f"테이블 생성 완료: {table_name}")
+    return None
 
 
-def put_items(table_name: str, region: str, items: list[dict]) -> None:
-    """PK=slug 멱등 적재 — 몇 번 재실행해도 같은 결과."""
-    table = boto3.resource("dynamodb", region_name=region).Table(table_name)
-    with table.batch_writer() as batch:
+def put_items(items: list[dict]) -> None:
+    """PK=slug 멱등 적재 — 몇 번 재실행해도 같은 결과. None 필드는 모델이 속성째 뺀다."""
+    with CatalogEntry.batch_write() as batch:
         for item in items:
-            batch.put_item(Item={k: v for k, v in item.items() if v is not None})
+            batch.save(CatalogEntry(**item))
 
 
 def main() -> int:
@@ -128,9 +123,10 @@ def main() -> int:
         print(json.dumps(items[:2], ensure_ascii=False, indent=2))
         return 0
 
+    dynamo.bind_tables()
     if args.create_table:
-        create_table(settings.exercise_catalog_table, settings.aws_region)
-    put_items(settings.exercise_catalog_table, settings.aws_region, items)
+        create_table()
+    put_items(items)
     print(f"적재 완료: {settings.exercise_catalog_table} ← {len(items)}종")
     return 0
 
