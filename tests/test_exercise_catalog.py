@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core import dynamo  # noqa: E402
 from app.exercises import repository  # noqa: E402
-from scripts.sync_exercise_catalog import build_items  # noqa: E402
+from app.exercises.domain import CatalogEntry  # noqa: E402
+from scripts.sync_exercise_catalog import build_items, put_items  # noqa: E402
 
 BACKEND_SAMPLE = {
     "barbell-bench-press": {
@@ -42,8 +43,8 @@ BACKEND_SAMPLE = {
 
 
 def _clear_caches():
-    dynamo._resource.cache_clear()
-    dynamo.get_exercise_catalog_table.cache_clear()
+    # 테이블명·접속 설정을 걸고 캐시된 커넥션을 비운다 — moto 안팎의 클라이언트가 섞이지 않게
+    dynamo.bind_tables()
     repository.get_exercise_catalog.cache_clear()
 
 
@@ -73,8 +74,7 @@ def test_build_items_keeps_only_joined_slugs():
 
 
 def test_catalog_lookup_returns_uuid_and_cdn_urls(catalog_table):
-    for item in build_items(BACKEND_SAMPLE, {"barbell-bench-press"}):
-        catalog_table.put_item(Item={k: v for k, v in item.items() if v is not None})
+    put_items(build_items(BACKEND_SAMPLE, {"barbell-bench-press"}))
 
     assert repository.exercise_id("barbell-bench-press") == "11f18f47-0001-0000-8072-021f94ad3563"
     assert repository.cdn_video_url("barbell-bench-press").endswith("barbell-bench-press.mp4")
@@ -94,7 +94,7 @@ def test_catalog_load_failure_degrades_to_empty(monkeypatch):
     def boom():
         raise RuntimeError("dynamodb down")
 
-    monkeypatch.setattr(repository, "get_exercise_catalog_table", boom)
+    monkeypatch.setattr(CatalogEntry, "scan", boom)
     assert repository.get_exercise_catalog() == {}
     repository.get_exercise_catalog.cache_clear()
 
