@@ -64,7 +64,7 @@
 ## 현재 구현 범위 (2026-07-25)
 
 **대상**: 클라이언트 API §1 AI 루틴 생성(`POST /ai/v1/routines`) + 유저 데이터 조회(프로필·운동기록·종목 — 조회 경로는 위 「유저 데이터 조회」 섹션).
-**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(boto3).
+**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(PynamoDB ODM — 모델은 각 domain.py, boto3 직접 호출 금지).
 **LLM: Amazon Nova 2 Lite(`global.amazon.nova-2-lite-v1:0`, $0.30/$2.50)** — 2026-07-29 비용 절감 확정(Haiku 4.5 대비 입력 1/3.3·출력 1/2). **반드시 global 프로필** — 1세대 Nova는 apac 프로필 강제인데 조직 SCP가 APAC 리전을 차단해 사용 불가(실측), global 라우팅만 SCP를 통과한다. 품질 문제 시 `LLM_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0`으로 즉시 롤백. 챗봇·루틴·제목·요약이 모델 하나를 공유한다(Converse API라 모델 무관 구조).
 **임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 `scripts/embed_routines.py --force` 전량 재계산 필수(임베딩 공간 호환 안 됨).
 호출 주체는 앱 클라이언트. 네트워크 인프라는 Terraform으로 별도 진행(범위 밖).
