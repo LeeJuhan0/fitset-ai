@@ -8,7 +8,6 @@ venv/
 # env / secrets
 .env
 .env.*
-!.env.example
 
 # tooling
 .pytest_cache/
