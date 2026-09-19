@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.agent.tools import failures
 from app.charts import service as charts_service
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 from app.core.schemas import ResponseScheme
 from app.exercises import repository as exercise_catalog
 
