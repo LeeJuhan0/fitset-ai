@@ -14,11 +14,21 @@ from fastapi.testclient import TestClient
 from app import deps
 from app.agent import graph
 from app.chat import repository, service
-from app.chat.domain import ThreadRecord
+from app.chat.domain import MessageRecord, ThreadRecord
 from app.core import llm, ratelimit
 from app.main import app
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _copy(thread: ThreadRecord) -> ThreadRecord:
+    """저장소 밖으로 나간 레코드 수정이 저장본에 새지 않게 복제한다."""
+    return ThreadRecord(**thread.attribute_values)
+
+
+def _stored(message: MessageRecord) -> dict:
+    """메시지 레코드 → 테스트가 들여다보는 저장 dict."""
+    return dict(message.attribute_values)
 
 
 class FakeStore:
@@ -31,14 +41,14 @@ class FakeStore:
         self.list_messages_calls = 0   # F6 검증용 — 파티션 전체 읽기 횟수
 
     def list_threads(self, user_id):
-        return [t.model_copy() for (uid, _), t in self.threads.items() if uid == user_id]
+        return [_copy(t) for (uid, _), t in self.threads.items() if uid == user_id]
 
     def get_thread(self, user_id, thread_id):
         thread = self.threads.get((user_id, thread_id))
-        return thread.model_copy() if thread else None
+        return _copy(thread) if thread else None
 
     def put_thread(self, record):
-        self.threads[(record.user_id, record.thread_id)] = record.model_copy()
+        self.threads[(record.user_id, record.thread_id)] = _copy(record)
 
     def delete_thread(self, user_id, thread_id):
         self.threads.pop((user_id, thread_id), None)
@@ -69,7 +79,7 @@ class FakeStore:
             messages = [m for m in messages if m["message_id"] < cursor]
         page = messages[-limit:]
         next_cursor = page[0]["message_id"] if len(messages) > limit else None
-        return page, next_cursor
+        return [MessageRecord(**m) for m in page], next_cursor
 
     def count_messages(self, thread_id, after):
         messages = self.messages.get(thread_id, [])
@@ -79,15 +89,15 @@ class FakeStore:
 
     def messages_after(self, thread_id, summary_upto):
         messages = self._sorted_messages(thread_id)
-        if summary_upto is None:
-            return messages
-        return [m for m in messages if m["message_id"] > summary_upto]
+        if summary_upto is not None:
+            messages = [m for m in messages if m["message_id"] > summary_upto]
+        return [MessageRecord(**m) for m in messages]
 
     def recent_messages(self, thread_id, limit):
-        return self._sorted_messages(thread_id)[-limit:]
+        return [MessageRecord(**m) for m in self._sorted_messages(thread_id)[-limit:]]
 
-    def put_message(self, item):
-        self.messages.setdefault(item["thread_id"], []).append(dict(item))
+    def put_message(self, message):
+        self.messages.setdefault(message.thread_id, []).append(_stored(message))
 
     def delete_messages(self, thread_id):
         self.messages.pop(thread_id, None)
