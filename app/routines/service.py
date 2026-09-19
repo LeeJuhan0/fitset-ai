@@ -6,16 +6,12 @@ import re
 from app.clients import postgres
 from app.core import llm, ratelimit
 from app.core.config import get_settings
-from app.core.errors import (
-    AiUnavailableError,
-    NoRoutineCandidateError,
-    RateLimitedError,
-    UnsafeConstraintError,
-)
+from app.core.exceptions import AiUnavailableError, RateLimitedError
 from app.exercises import repository as exercise_catalog
 from app.routines import domain, prompts
 from app.exercises.repository import get_exercise_meta
 from app.routines import repository
+from app.routines.exceptions import NoRoutineCandidateError, UnsafeConstraintError
 from app.routines.schemas import (
     RoutineExerciseOut,
     RoutineGenerateRequest,
@@ -68,12 +64,10 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         logger.info("context-parsed avoid applied: %s", sorted(parsed))
 
     # ⑥ 쿼리 임베딩 → 룰 필터 + 코사인 상위 K 를 쿼리 1건으로 → 랜덤 5 → LLM 일등 선택
-    try:
-        query_vector = await asyncio.to_thread(llm.embed_query, query_description)
-    except Exception as exc:
-        # 폴백이 없는 유일한 구간 — 503으로 나가므로 원인을 남긴다
-        logger.exception("query embedding failed")
-        raise AiUnavailableError() from exc
+    query_vector = await asyncio.to_thread(llm.try_embed_query, query_description)
+    if query_vector is None:
+        # 폴백이 없는 유일한 구간 — 원인은 try_embed_query가 로그에 남긴다
+        raise AiUnavailableError()
 
     def filters(avoid: set[str]) -> repository.SearchFilters:
         return repository.SearchFilters(
@@ -109,11 +103,9 @@ async def _analyze_query(request: RoutineGenerateRequest, goal: str) -> tuple[st
     fallback = prompts.fallback_description(
         goal, request.level, request.muscle_groups, request.minutes,
     )
-    try:
-        raw = await asyncio.to_thread(llm.complete, system, user, 300)
-    except Exception:
+    raw = await asyncio.to_thread(llm.try_complete, "describe", system, user, 300)
+    if raw is None:
         # 폴백이 응답을 살리므로 클라는 성공으로 본다 — 강등 사실은 로그로만 드러난다
-        logger.warning("describe LLM failed, falling back to template", exc_info=True)
         return fallback, set(), []
     description, avoided, unsafe = domain.parse_query_analysis(raw)
     if description is None:
@@ -125,10 +117,8 @@ async def _analyze_query(request: RoutineGenerateRequest, goal: str) -> tuple[st
 async def _pick_with_llm(sampled: list[dict], query_description: str) -> dict | None:
     """탑5 중 일등 선택 (LLM). 실패·범위 밖 응답이면 None → 호출부가 코사인 1위 폴백."""
     system, user = prompts.pick_best(sampled, query_description)
-    try:
-        answer = await asyncio.to_thread(llm.complete, system, user, 10)
-    except Exception:
-        logger.warning("pick LLM failed, falling back to cosine top-1", exc_info=True)
+    answer = await asyncio.to_thread(llm.try_complete, "pick", system, user, 10)
+    if answer is None:
         return None
     match = re.search(r"\d+", answer)
     if match is None:
