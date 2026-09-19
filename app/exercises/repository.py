@@ -22,9 +22,8 @@ from sqlalchemy import select
 
 from app.clients import mysql
 from app.core.config import get_settings
-from app.core.dynamo import get_exercise_catalog_table, to_plain
 from app.core.errors import ExerciseNotFoundError
-from app.exercises.domain import Equipment, Exercise, ExerciseMuscle, Muscle
+from app.exercises.domain import CatalogEntry, Equipment, Exercise, ExerciseMuscle, Muscle
 
 logger = logging.getLogger("fitset")
 
@@ -34,15 +33,9 @@ def get_exercise_catalog() -> dict[str, dict]:
     """slug → {exercise_id, thumbnail_url, video_url}. 실패 시 빈 dict(폴백 경로로 강등)."""
     catalog: dict[str, dict] = {}
     try:
-        kwargs: dict = {}
-        while True:
-            page = get_exercise_catalog_table().scan(**kwargs)
-            for item in page.get("Items", []):
-                entry = to_plain(item)
-                catalog[entry["slug"]] = entry
-            if "LastEvaluatedKey" not in page:
-                break
-            kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        # 1MB 상한에 잘린 페이지는 PynamoDB 이터레이터가 이어읽는다
+        for entry in CatalogEntry.scan():
+            catalog[entry.slug] = entry.to_entry()
     except Exception:
         logger.exception("exercise catalog load failed, degrading to metadata-only")
         return {}
