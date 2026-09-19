@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from app.clients import postgres
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 
 
 def _settings(**overrides):
