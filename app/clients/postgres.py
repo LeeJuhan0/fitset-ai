@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 
 logger = logging.getLogger("fitset")
 
