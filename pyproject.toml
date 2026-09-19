@@ -18,6 +18,7 @@ dependencies = [
     "sqlalchemy>=2.0.52",
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
+    "pynamodb>=6.0",
 ]
 
 [dependency-groups]
