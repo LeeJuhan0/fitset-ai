@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.chat import router as chat_router
+from app.core import dynamo
 from app.core.config import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import configure_logging, trace_id_var
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
         max_workers=get_settings().executor_max_workers, thread_name_prefix="blocking-io"
     )
     asyncio.get_running_loop().set_default_executor(executor)
+    # 모델 선언은 논리 이름뿐 — 환경별 테이블명·접속 설정을 첫 조회 전에 건다
+    dynamo.bind_tables()
 
     async def preload() -> None:
         try:
