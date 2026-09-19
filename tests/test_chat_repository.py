@@ -8,19 +8,12 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from app.chat import repository
-from app.chat.domain import ThreadRecord
+from app.chat import domain, repository
+from app.chat.domain import MessageRecord, ThreadRecord
 from app.core import dynamo
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 FAR_FUTURE = 4102444800   # 2100-01-01 epoch — 만료되지 않는 TTL
-
-
-def _clear_caches():
-    dynamo._resource.cache_clear()
-    dynamo.get_chat_threads_table.cache_clear()
-    dynamo.get_chat_messages_table.cache_clear()
-    dynamo.get_user_summaries_table.cache_clear()
 
 
 @pytest.fixture
@@ -28,8 +21,8 @@ def tables(monkeypatch):
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
         monkeypatch.setenv(key, "testing")
     with mock_aws():
-        # lru_cache된 리소스가 moto 밖에서 만들어졌을 수 있어 양쪽에서 비운다
-        _clear_caches()
+        # 테이블명·접속 설정을 걸고 캐시된 커넥션을 비운다 — moto 밖에서 만들어졌을 수 있다
+        dynamo.bind_tables()
         resource = boto3.resource("dynamodb", region_name="ap-northeast-2")
         resource.create_table(
             TableName="chat_threads",
@@ -62,7 +55,7 @@ def tables(monkeypatch):
             BillingMode="PAY_PER_REQUEST",
         )
         yield
-    _clear_caches()
+    dynamo.bind_tables()
 
 
 def _thread(thread_id: str = "01THREAD") -> ThreadRecord:
@@ -74,24 +67,22 @@ def _thread(thread_id: str = "01THREAD") -> ThreadRecord:
     )
 
 
-def _message(message_id: str) -> dict:
-    return {
-        "thread_id": "01THREAD",
-        "message_id": message_id,
-        "user_id": USER_ID,
-        "role": "user",
-        "content": "안녕",
-        "response_scheme": None,
-        "payload": None,
-        "created_at": "2026-07-29T12:00:00Z",
-    }
+def _message(message_id: str) -> MessageRecord:
+    return MessageRecord(
+        thread_id="01THREAD",
+        message_id=message_id,
+        user_id=USER_ID,
+        role="user",
+        content="안녕",
+        created_at="2026-07-29T12:00:00Z",
+    )
 
 
 def test_put_thread_stores_sparse_nulls(tables):
     # F5 전제 — None이 NULL 타입 속성으로 저장되면 if_not_exists가 NULL을
     # '있는 값'으로 보고 title을 영영 채우지 못한다. 속성 자체가 없어야 한다.
     repository.put_thread(_thread())
-    raw = dynamo.get_chat_threads_table().get_item(
+    raw = boto3.resource("dynamodb", region_name="ap-northeast-2").Table("chat_threads").get_item(
         Key={"user_id": USER_ID, "thread_id": "01THREAD"}
     )["Item"]
     assert "title" not in raw
@@ -150,8 +141,8 @@ def test_messages_after_returns_tail_in_order(tables):
     for index in range(5):
         repository.put_message(_message(f"01MSG{index}"))
     tail = repository.messages_after("01THREAD", "01MSG2")
-    assert [item["message_id"] for item in tail] == ["01MSG3", "01MSG4"]
-    assert all("content" in item for item in tail)
+    assert [item.message_id for item in tail] == ["01MSG3", "01MSG4"]
+    assert all(item.content == "안녕" for item in tail)
     assert len(repository.messages_after("01THREAD", None)) == 5
 
 
@@ -169,7 +160,7 @@ def test_messages_page_first_call_returns_latest_ascending(tables):
     for index in range(7):
         repository.put_message(_message(f"01MSG{index}"))
     items, cursor = repository.messages_page("01THREAD", limit=3)
-    assert [item["message_id"] for item in items] == ["01MSG4", "01MSG5", "01MSG6"]
+    assert [item.message_id for item in items] == ["01MSG4", "01MSG5", "01MSG6"]
     assert cursor == "01MSG4"   # 다음 페이지는 이보다 과거
 
 
@@ -183,7 +174,7 @@ def test_messages_page_cursor_walks_to_the_beginning(tables):
         pages.append(items)
         if cursor is None:
             break
-    stitched = [item["message_id"] for page in reversed(pages) for item in page]
+    stitched = [item.message_id for page in reversed(pages) for item in page]
     assert stitched == [f"01MSG{index}" for index in range(5)]
 
 
@@ -193,7 +184,7 @@ def test_messages_page_exact_limit_boundary_terminates(tables):
         repository.put_message(_message(f"01MSG{index}"))
     _, cursor = repository.messages_page("01THREAD", limit=2)
     items, cursor = repository.messages_page("01THREAD", limit=2, cursor=cursor)
-    assert [item["message_id"] for item in items] == ["01MSG0", "01MSG1"]
+    assert [item.message_id for item in items] == ["01MSG0", "01MSG1"]
     if cursor is not None:
         items, cursor = repository.messages_page("01THREAD", limit=2, cursor=cursor)
         assert items == []
@@ -206,3 +197,57 @@ def test_delete_messages_removes_every_page(tables):
         repository.put_message(_message(f"01MSG{index:03d}"))
     repository.delete_messages("01THREAD")
     assert repository.messages_page("01THREAD", limit=100) == ([], None)
+
+
+def test_reads_legacy_items_written_with_null_attributes(tables):
+    # 이관 전 boto3 경로는 user 메시지의 response_scheme·payload를 NULL 타입으로 저장했다
+    # — 그 항목과 Decimal 숫자가 든 payload 맵을 모델이 그대로 읽어야 한다
+    from decimal import Decimal
+
+    table = boto3.resource("dynamodb", region_name="ap-northeast-2").Table("chat_messages")
+    table.put_item(Item={
+        "thread_id": "01THREAD", "message_id": "01MSG0", "user_id": USER_ID, "role": "user",
+        "content": "안녕", "response_scheme": None, "payload": None,
+        "created_at": "2026-07-29T12:00:00Z",
+    })
+    table.put_item(Item={
+        "thread_id": "01THREAD", "message_id": "01MSG1", "user_id": USER_ID, "role": "assistant",
+        "content": "차트예요", "response_scheme": "chart",
+        "payload": {"metric": "bodyWeight", "y": [Decimal("70.5"), Decimal("71")], "unit": None},
+        "created_at": "2026-07-29T12:00:01Z",
+    })
+    items, _ = repository.messages_page("01THREAD", limit=10)
+    assert items[0].payload is None and items[0].response_scheme is None
+    view = domain.to_message_view(items[1])
+    assert view["payload"] == {"metric": "bodyWeight", "y": [70.5, 71], "unit": None}
+
+
+def test_payload_round_trips_floats_and_nested_nulls(tables):
+    # 구 to_storable(float→Decimal)·to_plain(Decimal→수) 변환을 모델 속성이 승계한다
+    message = _message("01MSG0")
+    message.role = "assistant"
+    message.response_scheme = "routine"
+    payload = {"routine": {"minutes": 45, "exercises": [{"weight": 42.5, "thumbnailUrl": None}]}}
+    message.payload = payload
+    repository.put_message(message)
+    items, _ = repository.messages_page("01THREAD", limit=1)
+    assert domain.to_message_view(items[0])["payload"] == payload
+    # 저장 전 레코드(done 이벤트 경로)도 같은 dict로 풀려야 한다
+    assert domain.to_message_view(message)["payload"] == payload
+
+
+def test_bind_tables_applies_environment_table_names(monkeypatch):
+    # stage는 chat_threads_stage처럼 접미사 테이블을 쓴다 — 모델의 논리 이름은 그대로 두고
+    # 설정값이 실제 테이블명을 정한다. 다시 묶으면 원래 이름으로 돌아와야 한다
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("CHAT_THREADS_TABLE", "chat_threads_stage")
+    get_settings.cache_clear()
+    dynamo.bind_tables()
+    assert ThreadRecord.Meta.table_name == "chat_threads_stage"
+    assert MessageRecord.Meta.table_name == "chat_messages"
+
+    monkeypatch.delenv("CHAT_THREADS_TABLE")
+    get_settings.cache_clear()
+    dynamo.bind_tables()
+    assert ThreadRecord.Meta.table_name == "chat_threads"
