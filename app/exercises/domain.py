@@ -6,9 +6,11 @@
 기존 slug와 동일함을 라이브 API로 확인해(thumbnails/{slug}.webp), slug는 키에서
 유도하는 계산 컬럼으로 유지한다 — 206행 테이블이라 인덱스 미사용 필터도 무방하다.
 """
+from pynamodb.attributes import UnicodeAttribute
 from sqlalchemy import BINARY, JSON, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, column_property, mapped_column
 
+from app.core.dynamo import DynamoModel
 from app.core.orm import BackendBase
 
 
@@ -60,3 +62,23 @@ class ExerciseMuscle(BackendBase):
     exercise_id: Mapped[bytes] = mapped_column(ForeignKey("exercise.id"))
     muscle_id: Mapped[bytes] = mapped_column(ForeignKey("muscle.id"))
     role: Mapped[str] = mapped_column(String(10))   # ENUM 대문자 (PRIMARY | SECONDARY)
+
+
+class CatalogEntry(DynamoModel):
+    """exercise_catalog 아이템 1건 — PK=slug, 백엔드 종목 마스터 캐시 (일 1회 배치 갱신).
+
+    AI 서버가 자체 생성할 수 없는 값만 담는다. 값이 없는 필드는 속성째 빠진다.
+    """
+
+    class Meta:
+        table_name = "exercise_catalog"
+
+    slug = UnicodeAttribute(hash_key=True)
+    exercise_id = UnicodeAttribute(null=True)
+    exercise_type = UnicodeAttribute(null=True)
+    thumbnail_url = UnicodeAttribute(null=True)
+    video_url = UnicodeAttribute(null=True)
+
+    def to_entry(self) -> dict:
+        """카탈로그 조회용 dict — 값이 없는 필드는 키째 뺀다."""
+        return dict(self.attribute_values)
