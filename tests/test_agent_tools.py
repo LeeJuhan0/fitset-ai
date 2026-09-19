@@ -82,7 +82,7 @@ async def test_chart_unresolved_exercise_returns_hints_not_empty_data(monkeypatc
 
 async def test_routine_server_fault_forbids_account_blame(monkeypatch):
     # 내부 API 장애(5xx)를 "계정 문제, 재로그인" 창작으로 번역하지 못하게 지시가 붙어야 한다 (prod 실측)
-    from app.core.errors import DomainError
+    from app.core.exceptions import DomainError
 
     async def fake_generate(user_id, request):
         raise DomainError("내부 API 호출에 실패했습니다.")
@@ -99,7 +99,7 @@ async def test_routine_server_fault_forbids_account_blame(monkeypatch):
 async def test_chart_server_fault_forbids_account_blame(monkeypatch):
     from app.agent.tools import chart
     from app.charts import service as charts_service
-    from app.core.errors import DomainError
+    from app.core.exceptions import DomainError
 
     def fail_body_weights(user_id, days):
         raise DomainError("기록 DB 조회에 실패했습니다.")
