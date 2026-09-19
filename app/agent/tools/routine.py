@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.core.schemas import ResponseScheme
 from app.agent.tools import failures
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 from app.routines import service as routines_service
 from app.routines.schemas import RoutineGenerateRequest
 
