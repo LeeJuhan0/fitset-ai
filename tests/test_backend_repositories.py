@@ -11,7 +11,8 @@ import pytest
 from sqlalchemy import create_engine
 
 from app.clients import mysql
-from app.core.errors import ExerciseNotFoundError, UserNotFoundError
+from app.exercises.exceptions import ExerciseNotFoundError
+from app.users.exceptions import UserNotFoundError
 from app.core.orm import BackendBase
 from app.exercises import repository as exercises_repository
 from app.exercises.domain import Equipment, Exercise, ExerciseMuscle, Muscle
