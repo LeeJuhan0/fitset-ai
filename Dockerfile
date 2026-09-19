@@ -18,9 +18,15 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
 # 애플리케이션 + 종목 마스터 데이터 (exercise-metadata만 필요)
 COPY app/ app/
 COPY data/exercise-metadata.ko.json data/exercise-metadata.ko.json
-# 배치 스크립트 — 같은 이미지를 CronJob 이 CMD 만 바꿔 실행한다
-# (종목 카탈로그 일 1회 동기화). 서버 실행에는 쓰이지 않는다
+# 배치 스크립트 — 같은 이미지를 CronJob·Job 이 command 만 바꿔 실행한다. 서버 실행에는 쓰이지 않는다
+#   python scripts/sync_exercise_catalog.py        종목 카탈로그 일 1회 동기화
+#   python scripts/load_routines_postgres.py ...   루틴 pgvector 적재(DDL 포함, 멱등)
+# 무엇이 들어가는지는 .dockerignore 의 허용 목록이 정한다
 COPY scripts/ scripts/
+
+# 루트가 아닌 고정 UID 로 실행 — k8s securityContext.runAsNonRoot 를 걸 수 있게. 런타임에 디스크 쓰기는 없다
+RUN useradd --uid 10001 --create-home app
+USER 10001
 
 EXPOSE 8000
 

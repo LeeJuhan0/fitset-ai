@@ -79,8 +79,10 @@ ArgoCD UI는 `kubectl -n argocd port-forward svc/argocd-server 8080:80` 후 http
 
 ```bash
 docker build --platform linux/amd64 -t fitset-ai-server .
-docker run --rm -p 8000:8000 -v ~/.aws:/root/.aws:ro -e AWS_PROFILE=default fitset-ai-server
+docker run --rm -p 8000:8000 -v ~/.aws:/home/app/.aws:ro -e AWS_PROFILE=default fitset-ai-server
 curl -s localhost:8000/health
 ```
+
+컨테이너는 UID 10001(app)로 돌기 때문에 차트에서 `runAsNonRoot: true`를 걸 수 있다. 이미지에는 서버 외에 배치 두 개가 들어 있다, `python scripts/sync_exercise_catalog.py`(CronJob)와 `python scripts/load_routines_postgres.py --ddl scripts/sql/routines_pgvector.sql --source s3://...`(루틴 적재 Job).
 
 ECR에 직접 push하지 않는다. main 머지가 유일한 push 경로다.

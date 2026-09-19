@@ -4,7 +4,10 @@ __pycache__
 *.pyc
 tests/
 docs/
-# scripts는 이미지에서 제외하되, EventBridge 배치(ECS RunTask)가 쓰는 동기화 스크립트만 포함
-scripts/
+# scripts는 이미지에서 제외하되, 같은 이미지로 도는 k8s 배치가 쓰는 것만 포함
+# (종목 카탈로그 동기화 CronJob, 루틴 pgvector 적재 Job과 그 DDL)
+scripts/*
 !scripts/sync_exercise_catalog.py
+!scripts/load_routines_postgres.py
+!scripts/sql
 .env
