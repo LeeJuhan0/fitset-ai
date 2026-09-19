@@ -7,8 +7,8 @@ URL 출처는 카탈로그 캐시의 CloudFront URL 하나뿐이다 (2026-08-12 
 구 폴백이던 종목 마스터 videoUrl은 소멸, ERD상 exercise 테이블에도 URL 컬럼이 없다).
 무서명·무기한이라 expiresAt이 null이고 저장된 대화를 다시 열어도 그대로 재생된다.
 """
-from app.core.errors import ExerciseNotFoundError, VideoNotFoundError
 from app.exercises import repository as exercise_catalog
+from app.exercises.exceptions import ExerciseNotFoundError, VideoNotFoundError
 
 
 async def get_video(slug: str, fallback: bool = False) -> dict:
