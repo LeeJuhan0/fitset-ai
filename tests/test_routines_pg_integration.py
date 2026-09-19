@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, insert, text
 from sqlalchemy.engine import make_url
 
 from app.clients import postgres
-from app.core.errors import DomainError
+from app.core.exceptions import DomainError
 from app.routines import repository
 from app.routines.domain import Routine
 
