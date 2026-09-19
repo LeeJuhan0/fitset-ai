@@ -2,7 +2,7 @@
 from fastapi import Request
 
 from app.core import auth
-from app.core.errors import UnauthorizedError
+from app.core.exceptions import UnauthorizedError
 
 
 def get_trace_id(request: Request) -> str:
