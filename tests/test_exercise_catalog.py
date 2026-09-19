@@ -168,7 +168,7 @@ async def test_video_fallback_rereads_catalog(catalog_only):
 
 async def test_video_missing_in_catalog_is_not_found(catalog_only):
     # 카탈로그에 영상이 없는 종목 — 대체 출처가 없으므로 영상 없음으로 끝난다
-    from app.core.errors import VideoNotFoundError
+    from app.exercises.exceptions import VideoNotFoundError
     from app.exercises import service as exercises_service
 
     with pytest.raises(VideoNotFoundError):
