@@ -172,16 +172,14 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
     now = clock.now_utc()
     await asyncio.to_thread(
         repository.put_message,
-        {
-            "thread_id": thread_id,
-            "message_id": domain.new_ulid(now),
-            "user_id": user_id,
-            "role": "user",
-            "content": content,
-            "response_scheme": None,
-            "payload": None,
-            "created_at": clock.iso_utc(now),
-        },
+        domain.MessageRecord(
+            thread_id=thread_id,
+            message_id=domain.new_ulid(now),
+            user_id=user_id,
+            role="user",
+            content=content,
+            created_at=clock.iso_utc(now),
+        ),
     )
 
     return _Turn(
@@ -199,16 +197,16 @@ async def _persist_answer(
     settings = get_settings()
     title = await turn.title()
     answered_at = clock.now_utc()
-    assistant_message = {
-        "thread_id": thread_id,
-        "message_id": domain.new_ulid(answered_at),
-        "user_id": user_id,
-        "role": "assistant",
-        "content": result.content,
-        "response_scheme": result.response_scheme,
-        "payload": result.payload,
-        "created_at": clock.iso_utc(answered_at),
-    }
+    assistant_message = domain.MessageRecord(
+        thread_id=thread_id,
+        message_id=domain.new_ulid(answered_at),
+        user_id=user_id,
+        role="assistant",
+        content=result.content,
+        response_scheme=result.response_scheme,
+        payload=result.payload,
+        created_at=clock.iso_utc(answered_at),
+    )
     await asyncio.to_thread(repository.put_message, assistant_message)
     await asyncio.to_thread(
         repository.touch_thread,
@@ -246,7 +244,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     if not fresh:
         return None
 
-    transcript = "\n".join(f"{item['role']}: {item.get('content', '')}" for item in fresh)
+    transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in fresh)
     system, user = prompts.summarize_thread(thread.summary_text, transcript)
     try:
         summary_text = await asyncio.to_thread(llm.complete, system, user, 600)
@@ -257,7 +255,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
     summary_text = summary_text.strip()
     await asyncio.to_thread(
-        repository.save_summary, user_id, thread_id, summary_text, fresh[-1]["message_id"]
+        repository.save_summary, user_id, thread_id, summary_text, fresh[-1].message_id
     )
 
     previous = await asyncio.to_thread(repository.get_user_summary, user_id)
@@ -319,12 +317,12 @@ async def _make_title(first_message: str) -> str:
     return domain.fallback_title(title, settings.chat_title_max_length)
 
 
-def _to_lc_messages(items: list[dict]) -> list:
+def _to_lc_messages(items: list[domain.MessageRecord]) -> list:
     """저장 메시지 → LangChain 메시지. payload는 컨텍스트에 싣지 않는다(투영에서 제외됨)."""
     converted = []
     for item in items:
-        text = item.get("content") or ""
-        if item.get("role") == "assistant":
+        text = item.content or ""
+        if item.role == "assistant":
             converted.append(AIMessage(content=text))
         else:
             converted.append(HumanMessage(content=text))
