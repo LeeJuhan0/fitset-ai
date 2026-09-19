@@ -3,7 +3,8 @@
 내부 API 장애 사유를 그대로 돌려주면 LLM이 "계정 연결 문제, 다시 로그인해보라"처럼
 유저가 고칠 수 없는 안내를 창작한다(prod 실측). 서버측 실패에는 안내 방법까지 지시한다.
 """
-from app.core.errors import DomainError, UserNotFoundError
+from app.core.exceptions import DomainError
+from app.users.exceptions import UserNotFoundError
 
 SERVER_FAULT_NOTE = (
     "서버 일시 장애로 데이터를 불러오지 못했다. 유저의 계정이나 로그인 문제가 아니다. "
