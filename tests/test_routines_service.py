@@ -4,7 +4,8 @@
 """
 import pytest
 
-from app.core.errors import AiUnavailableError, NoRoutineCandidateError
+from app.core.exceptions import AiUnavailableError
+from app.routines.exceptions import NoRoutineCandidateError
 from app.routines import service
 from app.routines.schemas import RoutineGenerateRequest
 
