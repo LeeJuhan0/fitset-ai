@@ -47,9 +47,10 @@ class Settings(BaseSettings):
     pg_statement_timeout: float = 2.0   # 초. 검색 1건 상한 — 필터 후 2만 건 exact 정렬도 수십 ms
     pg_pool_max: int = 5
 
-    # 인증 (JWT RS256) — 백엔드가 게시한 JWKS 공개키로 검증, 로컬 개발은 PEM 직접 주입으로 우회
-    # (로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증되지 않는다)
-    jwks_url: str = "https://api.fitset.kro.kr/.well-known/jwks.json"
+    # 인증 (JWT RS256) — 백엔드 공개키를 SSM에서 읽어 검증한다.
+    # 환경마다 키가 다르므로 파라미터 경로를 환경변수로 갈아끼운다(prod는 /fitset/prod/...).
+    # 로컬 개발은 PEM 직접 주입으로 우회한다(로컬 백엔드는 임시 키페어라 어느 환경 키와도 안 맞는다).
+    jwt_public_key_param: str = "/fitset/dev/jwt/public-key"
     jwt_public_key_pem: str | None = None
 
     # Bedrock — 임베딩 모델은 global.cohere.embed-v4:0 고정 (CLAUDE.md)

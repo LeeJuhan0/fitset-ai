@@ -1,4 +1,4 @@
-"""JWT 검증 테스트 — 테스트 생성 키페어로 서명해 네트워크(JWKS) 없이 검증 규칙을 확인한다."""
+"""JWT 검증 테스트 — 테스트 생성 키페어로 서명해 네트워크(SSM) 없이 검증 규칙을 확인한다."""
 import time
 from types import SimpleNamespace
 
@@ -6,7 +6,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
+from botocore.exceptions import ClientError
 
 from app.core import auth
 from app.core.config import Settings
@@ -17,6 +17,9 @@ _PUBLIC_PEM = _PRIVATE_KEY.public_key().public_bytes(
     serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
 ).decode()
 _OTHER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_OTHER_PUBLIC_PEM = _OTHER_KEY.public_key().public_bytes(
+    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+).decode()
 
 
 def _token(key=_PRIVATE_KEY, **overrides) -> str:
@@ -29,18 +32,17 @@ def _token(key=_PRIVATE_KEY, **overrides) -> str:
 
 @pytest.fixture
 def pem_mode(monkeypatch):
-    """PEM 우회 경로(로컬 개발) — JWKS 없이 주입된 공개키로 검증한다."""
+    """PEM 우회 경로(로컬 개발) — SSM 없이 주입된 공개키로 검증한다."""
     monkeypatch.setattr(auth, "get_settings", lambda: Settings(jwt_public_key_pem=_PUBLIC_PEM))
 
 
 @pytest.fixture
-def jwks_mode(monkeypatch):
-    """JWKS 경로(prod) — 클라이언트를 스텁으로 바꿔 kid 조회 결과를 주입한다."""
+def ssm_mode(monkeypatch):
+    """SSM 경로(배포) — 파라미터 조회를 스텁으로 바꾼다. lru_cache를 타지 않도록 함수째 바꾼다."""
     monkeypatch.setattr(auth, "get_settings", lambda: Settings(jwt_public_key_pem=None))
 
-    def install(get_signing_key_from_jwt):
-        stub = SimpleNamespace(get_signing_key_from_jwt=get_signing_key_from_jwt)
-        monkeypatch.setattr(auth, "_jwks_client", lambda: stub)
+    def install(read_public_key):
+        monkeypatch.setattr(auth, "_public_key", read_public_key)
 
     return install
 
@@ -73,17 +75,15 @@ def test_garbage_token_rejected(pem_mode):
         auth.verify_token("not-a-token")
 
 
-def test_jwks_key_verifies_when_no_pem(jwks_mode):
-    jwks_mode(lambda token: SimpleNamespace(key=_PRIVATE_KEY.public_key()))
+def test_ssm_key_verifies_when_no_pem(ssm_mode):
+    ssm_mode(lambda: _PUBLIC_PEM)
     assert auth.verify_token(_token()) == "user-1"
 
 
-def test_unknown_kid_is_unauthorized(jwks_mode):
-    # JWKS에 없는 kid — 우리 키로 서명되지 않은 토큰이므로 401
-    def raise_unknown(token):
-        raise PyJWKClientError('Unable to find a signing key that matches: "test-kid"')
-
-    jwks_mode(raise_unknown)
+def test_other_environment_key_is_unauthorized(ssm_mode):
+    # 다른 환경의 공개키가 실린 경우 — 우리 토큰을 서명한 키가 아니므로 401.
+    # kid 매칭이 사라졌으므로 서명 검증이 이 구분을 맡는다.
+    ssm_mode(lambda: _OTHER_PUBLIC_PEM)
     with pytest.raises(UnauthorizedError):
         auth.verify_token(_token())
 
@@ -95,12 +95,12 @@ def test_missing_bearer_header_rejected():
         deps.get_current_user_id(SimpleNamespace(headers={}))
 
 
-def test_jwks_outage_is_server_error(jwks_mode):
-    # 엔드포인트 장애는 토큰 문제가 아니다 — 401로 위장하지 않고 500으로 구분
-    def raise_connection(token):
-        raise PyJWKClientConnectionError("connection refused")
+def test_ssm_outage_is_server_error(ssm_mode):
+    # SSM 장애·권한 누락은 토큰 문제가 아니다 — 401로 위장하지 않고 500으로 구분
+    def raise_client_error():
+        raise ClientError({"Error": {"Code": "AccessDeniedException"}}, "GetParameter")
 
-    jwks_mode(raise_connection)
+    ssm_mode(raise_client_error)
     with pytest.raises(DomainError) as caught:
         auth.verify_token(_token())
     assert not isinstance(caught.value, UnauthorizedError)

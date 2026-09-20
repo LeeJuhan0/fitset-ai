@@ -2,7 +2,7 @@
 
 운동 앱 FitSet의 AI 백엔드 — AI 채팅(스레드)과 루틴 생성·추천. FastAPI + LangGraph.
 
-인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 백엔드가 게시한 JWKS 공개키로 직접 검증한다.
+인증은 아래 「인증 및 토큰(JWT) 규약」 섹션 참조 — 이 서버가 SSM 에서 읽은 백엔드 공개키로 직접 검증한다.
 저장소는 **DynamoDB 온디맨드**(채팅·유저 요약·종목 카탈로그, 2026-07-25 확정). 루틴은 **RDS Postgres pgvector로 이관 중**(2026-08-28 결정, [`docs/루틴 저장소 pgvector.md`](docs/루틴%20저장소%20pgvector.md), 로드맵 [`docs/루틴 pgvector 이관 로드맵.md`](docs/루틴%20pgvector%20이관%20로드맵.md)) — 룰 필터와 코사인 상위 30을 Postgres 1쿼리로. 인메모리 루틴 스토어 부팅 로드는 2026-08-27 제거(PR #44), 이관 완료 전까지 루틴 생성은 503.
 배포는 **EKS + ArgoCD**(fitset-infra 레포). 이 레포의 CD는 ECR push까지만 하고, 반영은 fitset-infra `values-{env}.yaml`의 `image.tag` 갱신으로 한다 — [`docs/k8s 배포 가이드.md`](docs/k8s%20배포%20가이드.md).
 
@@ -13,10 +13,13 @@
 - [`docs/document-structure.md`](docs/document-structure.md) — DynamoDB 테이블 구조(ERD)와 payload JSON 규약
 - [`docs/백엔드 ERD.md`](docs/백엔드%20ERD.md) — 백엔드(Spring·MySQL) DB 참조 사본 + AI 서버 관점 정합성 체크
 
-## 인증 및 토큰(JWT) 규약 (2026-08-04 JWKS 전환)
+## 인증 및 토큰(JWT) 규약 (2026-09-21 SSM 공개키 전환)
 
-출처: [fitset 서버 비즈니스 규칙 §9](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/24379394/fitset), AI 서버 JWT 공개키(JWKS) 검증 가이드(백엔드 강인화, 2026-08-04).
-구 SSM 공개키 방식(`/fitset/auth/jwt-public-key`)은 폐기 — 이 서버는 SSM·KMS 권한이 필요 없다.
+출처: [fitset 서버 비즈니스 규칙 §9](https://asmhangang.atlassian.net/wiki/spaces/FIT/pages/24379394/fitset).
+
+구 JWKS 방식(`/.well-known/jwks.json`)은 폐기(fitset-api #176). 그 엔드포인트는 정적 파일이라
+런타임 서명키와 어긋났다 — dev 가 서명한 토큰을 dev 가 게시한 JWKS 로 검증할 수 없었다.
+공개키를 환경별 SSM 파라미터에서 직접 읽으면 어긋날 자리가 없다.
 
 ### 트래픽 구조
 
@@ -26,18 +29,18 @@
 ### 토큰 발급과 키 배포
 
 - JWT는 자바 스프링 백엔드가 발급한다(access TTL 15분, 만료 시 앱이 refresh — AI 서버는 refresh에 관여하지 않는다).
-- RSA 개인키는 백엔드만 보유(SSM SecureString `/fitset/prod/jwt/private-key`, 백엔드 태스크에만 주입).
-- 공개키는 JWKS로 공개 게시 — 이 서버는 토큰 헤더 `kid`와 일치하는 키로 서명을 검증한다.
+- RSA 개인키는 백엔드만 보유(SSM SecureString `/fitset/{env}/jwt/private-key`, 백엔드에만 주입). 이 서버는 공개키만 읽으므로 토큰을 발급할 수 없다.
+- 공개키는 환경별 SSM 파라미터로 배포 — 이 서버는 그 키로 서명을 검증한다.
 
-### JWKS
+### 공개키 배포
 
 | 항목 | 값 |
 | --- | --- |
-| 엔드포인트 | `https://api.fitset.kro.kr/.well-known/jwks.json` (정적 파일, 인증 불필요) |
-| 현재 kid | `fitset-key-2026-08` (SSM `/fitset/prod/jwt/key-id`와 일치) |
-| 캐싱 | PyJWKClient가 서명키를 캐시, 미지의 kid 도착 시 자동 재조회 |
-| 키 로테이션 | 백엔드가 JWKS에 새 키 게시 + SSM 개인키·key-id 갱신, AI 서버는 무조치(kid 재조회) |
-| 로컬 개발 | 로컬 백엔드는 임시 키페어(kid=ephemeral)라 prod JWKS로 검증 불가 — `JWT_PUBLIC_KEY_PEM` 주입으로 우회 |
+| 파라미터 | `/fitset/{env}/jwt/public-key` — `JWT_PUBLIC_KEY_PARAM` 으로 지정(기본 dev) |
+| 타입 | `String`. 공개키는 암호화할 값이 아니다 — 읽는 쪽에 KMS 권한이 필요 없고 `ssm:GetParameter` 하나면 된다 |
+| 캐싱 | 프로세스 수명 동안 1회 조회(`lru_cache`) |
+| 키 로테이션 | 백엔드가 개인키·공개키 파라미터를 갱신한 뒤 **이 서버를 재기동**해야 한다. JWKS 시절의 무설정 대응은 사라졌다 |
+| 로컬 개발 | 로컬 백엔드는 임시 키페어라 어느 환경 키와도 안 맞는다 — `JWT_PUBLIC_KEY_PEM` 주입으로 우회 |
 
 ### 서명·클레임
 
@@ -48,9 +51,9 @@
 | `exp` | 발급 후 15분 |
 | `iss`·`aud` | 없음 — 검증 라이브러리의 issuer·audience 검증을 켜면 안 된다 |
 
-- 검증 절차: ① 토큰 헤더 kid로 JWKS 공개키 조회 → ② RS256 서명 검증 → ③ `exp` 만료 확인 → ④ `sub`를 userId로 사용.
+- 검증 절차: ① SSM 공개키 조회 → ② RS256 서명 검증 → ③ `exp` 만료 확인 → ④ `sub`를 userId로 사용.
 - `type` 클레임 검사는 없다(2026-08-05 확정, 구 §9 규약에서 변경) — 백엔드 refresh 토큰은 JWT가 아닌 불투명 랜덤 문자열(fitset-api `RefreshTokenGenerator`, SecureRandom 32바이트)이라 서명 검증 자체를 통과할 수 없어 access와 혼동될 경로가 없다.
-- JWKS 조회 실패는 토큰 문제가 아니므로 401이 아닌 500(INTERNAL_ERROR)으로 구분한다.
+- SSM 조회 실패(장애·권한 누락)는 토큰 문제가 아니므로 401이 아닌 500(INTERNAL_ERROR)으로 구분한다.
 
 ## 유저 데이터 조회 — DB 직접 조회 (2026-08-12 합의)
 
@@ -71,7 +74,7 @@
 
 루틴 생성 요청 처리 플로우:
 
-1. **인증**: `Authorization: Bearer` → JWKS 공개키(RS256, kid 매칭)로 검증 → `sub` = userId (위 인증 절차 참조)
+1. **인증**: `Authorization: Bearer` → SSM 공개키(RS256)로 검증 → `sub` = userId (위 인증 절차 참조)
 2. **유저 컨텍스트**: 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
 3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
 4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
