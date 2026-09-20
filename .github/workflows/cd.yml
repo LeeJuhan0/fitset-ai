@@ -2,7 +2,7 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
   workflow_dispatch:
 
 concurrency:
@@ -10,17 +10,20 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  id-token: write   # OIDC 로 AWS 역할 assume (ECR push 전용)
+  id-token: write # OIDC 로 AWS 역할 assume
   contents: read
 
 env:
   AWS_REGION: ap-northeast-2
   ECR_REPOSITORY: fitset-ai-server
+  INSTANCE_ID: i-015b33f7efe9e5fa1
+  DEV_HOST: api-dev.fitset.kro.kr
 
-# ECR push 까지만 한다. 배포는 fitset-infra 의 values-{env}.yaml image.tag 를 ArgoCD 가 반영한다.
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,15 +37,79 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push image (amd64, tagged by commit SHA)
-        id: build
+      # 같은 커밋으로 다시 돌릴 때(workflow_dispatch) 이미 올라간 태그를 덮어쓰려다
+      # immutable tag 로 실패한다. 있으면 빌드를 건너뛰고 배포만 한다.
+      - name: Check image exists
+        id: exists
+        run: |
+          if aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+               --image-ids imageTag=${{ github.sha }} >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "이미 올라간 이미지다 — 빌드를 건너뛴다"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push image
+        if: steps.exists.outputs.found == 'false'
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
+          # 태그는 커밋 SHA 만 단다. latest 처럼 움직이는 태그를 쓰면
+          # 박스에 떠 있는 이미지가 어느 커밋인지 되짚을 수 없다.
           IMAGE="$REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
-          LATEST="$REGISTRY/$ECR_REPOSITORY:latest"
-          docker build --platform linux/amd64 -t "$IMAGE" -t "$LATEST" .
+          docker build --platform linux/amd64 -t "$IMAGE" .
           docker push "$IMAGE"
-          docker push "$LATEST"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+      - name: Deploy via SSM
+        id: send
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --timeout-seconds 600 \
+            --parameters '{"commands":[
+              "set -e",
+              "aws s3 sync s3://fitset-deploy-artifacts/dev/ai-compose/ /opt/fitset/ --delete",
+              "chmod +x /opt/fitset/up.sh",
+              "echo ${{ github.sha }} > /opt/fitset/image",
+              "/opt/fitset/up.sh",
+              "for i in $(seq 1 60); do curl -fsS localhost:8000/health >/dev/null && exit 0; sleep 5; done",
+              "echo 헬스체크가 5분을 넘겼다. 컨테이너 로그를 남긴다.",
+              "docker logs --tail 100 fitset-ai 2>&1 || true",
+              "exit 1"
+            ]}' \
+            --query Command.CommandId --output text)
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment
+        run: |
+          CID="${{ steps.send.outputs.command_id }}"
+          for i in $(seq 1 70); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CID" \
+              --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+            esac
+            sleep 10
+          done
+
+          # 성공이든 실패든 박스에서 나온 출력을 워크플로 로그에 남긴다.
+          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Out:StandardOutputContent,Err:StandardErrorContent}' --output json \
+            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(d["Status"]); print(d["Out"]); print(d["Err"], file=sys.stderr); sys.exit(0 if d["Status"] == "Success" else 1)'
+
+      - name: Verify through ALB
+        run: |
+          # ALB 타깃이 healthy 로 바뀌기까지 헬스체크가 두 번(15초 간격) 더 돌아야 한다.
+          # 인증이 걸린 경로면 401·403 이 나오는데 그것도 응답하고 있다는 증거다.
+          for i in $(seq 1 20); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$DEV_HOST/ai/v1/health" || echo 000)
+            echo "시도 $i: $CODE"
+            case "$CODE" in
+              000|5*) sleep 10 ;;
+              *) echo "ALB 를 통해 응답을 받았다 ($CODE)"; exit 0 ;;
+            esac
+          done
+          echo "::error::ALB 를 통한 확인에 실패했다"
+          exit 1
