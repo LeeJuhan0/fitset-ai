@@ -34,7 +34,7 @@ def _user_sets(user_id: bytes, days: int) -> Select:
     )
 
 
-def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
+def _session_summary(user_id: bytes, days: int, limit: int) -> Select:
     """최근 기간 날짜별 세션 수와 운동 시간 집계"""
     workout_date = func.date(WorkoutHistory.started_at).label("workout_date")
     active = WorkoutHistory.active_duration_seconds
@@ -51,7 +51,7 @@ def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) ->
     )
 
 
-def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
+def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str) -> Select:
     """특정 종목 최근 세트별 실측값 조회"""
     return (
         _user_sets(user_id, days)
@@ -68,7 +68,7 @@ def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str | None) -> S
     )
 
 
-def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
+def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str) -> Select:
     """특정 종목 최고 중량과 추정 1RM 최대치 조회"""
     return (
         _user_sets(user_id, days)
@@ -82,7 +82,7 @@ def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str | None) -> Sel
     )
 
 
-def _volume_by_exercise(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
+def _volume_by_exercise(user_id: bytes, days: int, limit: int) -> Select:
     """기간 내 종목별 총볼륨 상위 조회"""
     total_volume = func.sum(WorkoutHistorySet.weight * WorkoutHistorySet.reps).label("total_volume_kg")
     return (
@@ -120,6 +120,14 @@ class QueryWorkoutHistory(BaseModel):
     limit: int = Field(default=10, ge=1, le=MAX_ROWS, description="반환 행 수 상한")
 
 
+def _build_statement(query: "QueryWorkoutHistory", user_id: bytes, slug: str | None) -> Select:
+    """템플릿 빌더 호출 종목 템플릿만 slug 전달"""
+    builder, needs_exercise = _TEMPLATES[query.template]
+    if needs_exercise:
+        return builder(user_id, query.days, query.limit, slug)
+    return builder(user_id, query.days, query.limit)
+
+
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     """템플릿 선택 실행 후 결과 표 텍스트 반환"""
     if not mysql.is_configured():
@@ -129,7 +137,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         ), None
 
     query = QueryWorkoutHistory(**args)
-    builder, needs_exercise = _TEMPLATES[query.template]
+    _, needs_exercise = _TEMPLATES[query.template]
 
     slug = None
     if needs_exercise:
@@ -146,7 +154,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
                 "exercise 인자에 종목명을 넣어 다시 호출한다."
             ), None
 
-    stmt = builder(mysql.uuid_bytes(user_id), query.days, query.limit, slug)
+    stmt = _build_statement(query, mysql.uuid_bytes(user_id), slug)
     rows = await asyncio.to_thread(mysql.fetch_all, stmt)
     if not rows or all(value is None for value in rows[0].values()):
         return (

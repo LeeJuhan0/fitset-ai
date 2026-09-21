@@ -41,7 +41,8 @@ def test_statements_bind_values_instead_of_inlining():
     # 모든 템플릿은 값이 바인딩 파라미터로만 들어간다 — SQL 문자열에 값이 박히면 안 된다
     user = b"\x11" * 16
     for name, (builder, needs_exercise) in history._TEMPLATES.items():
-        stmt = builder(user, 7, 10, "barbell-bench-press" if needs_exercise else None)
+        args = (user, 7, 10, "barbell-bench-press") if needs_exercise else (user, 7, 10)
+        stmt = builder(*args)
         compiled = stmt.compile()
         sql = str(compiled)
         assert "barbell" not in sql, name
