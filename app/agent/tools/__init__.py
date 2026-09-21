@@ -6,19 +6,15 @@ from app.agent.tools import chart, exercise, history, routine
 
 logger = logging.getLogger("fitset")
 
-TOOL_SCHEMAS = [
-    chart.DrawChart,
-    routine.RecommendRoutine,
-    exercise.GetExerciseGuide,
-    history.QueryWorkoutHistory,
+_TOOLS = [
+    (chart.DrawChart, chart.run),
+    (routine.RecommendRoutine, routine.run),
+    (exercise.GetExerciseGuide, exercise.run),
+    (history.QueryWorkoutHistory, history.run),
 ]
 
-TOOL_RUNNERS = {
-    chart.DrawChart.__name__: chart.run,
-    routine.RecommendRoutine.__name__: routine.run,
-    exercise.GetExerciseGuide.__name__: exercise.run,
-    history.QueryWorkoutHistory.__name__: history.run,
-}
+TOOL_SCHEMAS = [schema for schema, _ in _TOOLS]
+TOOL_RUNNERS = {schema.__name__: runner for schema, runner in _TOOLS}
 
 
 async def dispatch(user_id: str, name: str, args: dict) -> tuple[str, dict | None]:
