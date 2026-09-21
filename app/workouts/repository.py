@@ -1,12 +1,3 @@
-"""운동 기록 조회 — 백엔드 MySQL 직조회 (구 내부 API §4.2·§4.5·§4.6 승계).
-
-반환 형태는 구 spring 클라이언트와 동일하게 유지한다 — 소비자(routines·charts)의
-로직이 데이터 출처 교체를 모르게 한다. 전 함수 동기 — 호출부가 asyncio.to_thread로 감싼다.
-
-0 → null 변환은 구 백엔드 책임의 승계다 — ERD상 weight·duration_seconds·rest_seconds는
-NOT NULL default 0이라 "0으로 수행"과 "미기록/맨몸/마지막 세트"가 구분되지 않는다.
-와이어에서는 미기록을 null로 내보낸다 (구 명세 §4.5 규정).
-"""
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -18,19 +9,19 @@ from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutH
 
 
 def _cutoff(days: int) -> datetime:
-    """기간 하한 — DB가 naive UTC라 tz를 벗겨 비교한다."""
+    """조회 기간 하한 naive UTC 시각 계산"""
     return (clock.now_utc() - timedelta(days=days)).replace(tzinfo=None)
 
 
 def _nullify_zero(value):
-    """NOT NULL default 0 컬럼의 0 → null (미기록·맨몸·마지막 세트)."""
+    """기본값 0 컬럼의 0 을 미기록 null 로 변환"""
     if not value:
         return None
     return float(value) if not isinstance(value, int) else value
 
 
 def get_recent_workouts(user_id: str, days: int) -> list[dict]:
-    """최근 운동 기록 raw (구 §4.2) — 세션 목록(종목·세트 중첩), 최신순."""
+    """최근 세션별 종목 세트 중첩 기록 최신순 조회"""
     sessions = mysql.fetch_all(
         select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at)
         .where(WorkoutHistory.user_id == mysql.uuid_bytes(user_id), WorkoutHistory.started_at >= _cutoff(days))
@@ -55,7 +46,6 @@ def get_recent_workouts(user_id: str, days: int) -> list[dict]:
         )
         .select_from(WorkoutHistoryExercise)
         .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
-        # 세트 없는 운동도 exercises 목록에는 나와야 한다 — outer join 후 세트 행만 걸러 담는다
         .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id, isouter=True)
         .where(WorkoutHistoryExercise.workout_history_id.in_([row["id"] for row in sessions]))
         .order_by(WorkoutHistoryExercise.order_index, WorkoutHistorySet.order_index)
@@ -99,7 +89,7 @@ def get_recent_workouts(user_id: str, days: int) -> list[dict]:
 
 
 def get_exercise_sets(user_id: str, slug: str, days: int) -> list[dict]:
-    """종목별 수행 세트 시계열 (구 §4.5) — 세션 중첩 없는 평탄 목록, performedAt 오름차순."""
+    """종목별 수행 세트 평탄 시계열 오름차순 조회"""
     rows = mysql.fetch_all(
         select(
             WorkoutHistory.id.label("workout_id"),
@@ -136,7 +126,7 @@ def get_exercise_sets(user_id: str, slug: str, days: int) -> list[dict]:
 
 
 def get_workout_sessions(user_id: str, days: int) -> list[dict]:
-    """세션 요약 목록 (구 §4.6) — 종목·세트 없이 세션 메타만. 시간·빈도 차트용."""
+    """세션 시작 종료 활동 시간 요약 목록 조회"""
     rows = mysql.fetch_all(
         select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at, WorkoutHistory.active_duration_seconds)
         .where(WorkoutHistory.user_id == mysql.uuid_bytes(user_id), WorkoutHistory.started_at >= _cutoff(days))
@@ -147,9 +137,7 @@ def get_workout_sessions(user_id: str, days: int) -> list[dict]:
             "id": mysql.uuid_str(row["id"]),
             "startedAt": mysql.iso_from_db(row["started_at"]),
             "endedAt": mysql.iso_from_db(row["ended_at"]),
-            # 실제 DB는 활동 시간을 active_duration 컬럼에 직접 저장한다 (2026-08-28 실스키마 확인)
             "activeDurationSeconds": row["active_duration_seconds"] or 0,
         }
         for row in rows
     ]
-

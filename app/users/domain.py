@@ -1,9 +1,3 @@
-"""유저 프로필·신체 기록 엔티티 — 백엔드 MySQL 스키마 사본 (docs/백엔드 ERD.md와 1:1).
-
-주인은 백엔드(Spring·JPA)다 — 읽기 전용 조회에만 쓰고, 조회에 필요한 컬럼만 선언한다.
-2026-08-25 백엔드 리팩토링 반영: 단위 접미사 제거(#93 height_cm→height, weight_kg→weight),
-body_weight_log→body_weight_history 개명.
-"""
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -18,11 +12,11 @@ class UserProfile(BackendBase):
 
     id: Mapped[bytes] = mapped_column(BINARY(16), primary_key=True)
     user_id: Mapped[bytes] = mapped_column(BINARY(16), unique=True)
-    gender: Mapped[str] = mapped_column(String(10))        # ENUM 대문자 (MALE | FEMALE)
+    gender: Mapped[str] = mapped_column(String(10))
     birth_date: Mapped[date] = mapped_column(Date)
-    height: Mapped[Decimal] = mapped_column(Numeric(5, 1))  # cm
-    workout_goal: Mapped[str] = mapped_column(String(20))  # ENUM 대문자 (HYPERTROPHY …)
-    level: Mapped[str] = mapped_column(String(20))         # ENUM 대문자 (BEGINNER …)
+    height: Mapped[Decimal] = mapped_column(Numeric(5, 1))
+    workout_goal: Mapped[str] = mapped_column(String(20))
+    level: Mapped[str] = mapped_column(String(20))
 
 
 class UserAvoidedMuscle(BackendBase):
@@ -38,5 +32,5 @@ class BodyWeightHistory(BackendBase):
 
     id: Mapped[bytes] = mapped_column(BINARY(16), primary_key=True)
     user_id: Mapped[bytes] = mapped_column(BINARY(16))
-    weight: Mapped[Decimal] = mapped_column(Numeric(5, 2))  # kg
+    weight: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     measured_at: Mapped[datetime] = mapped_column(DateTime)

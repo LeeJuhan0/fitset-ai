@@ -1,8 +1,3 @@
-"""유저 프로필·체중 조회 — 백엔드 MySQL 직조회 (구 내부 API §4.1·§4.4 승계).
-
-반환 형태는 구 spring 클라이언트와 동일하게 유지한다 — 소비자(routines·charts)의
-로직이 데이터 출처 교체를 모르게 한다. 전 함수 동기 — 호출부가 asyncio.to_thread로 감싼다.
-"""
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -15,7 +10,7 @@ from app.users.exceptions import UserNotFoundError
 
 
 def get_profile(user_id: str) -> dict:
-    """유저 프로필 (구 §4.1) — heightCm·weightKg(최신)·gender·birthDate·goal·level·avoidBodyParts."""
+    """유저 프로필 최신 체중 기피 부위 MySQL 조회"""
     uid = mysql.uuid_bytes(user_id)
     rows = mysql.fetch_all(
         select(
@@ -36,7 +31,6 @@ def get_profile(user_id: str) -> dict:
         .join(Muscle, Muscle.id == UserAvoidedMuscle.muscle_id)
         .where(UserAvoidedMuscle.user_id == uid)
     )
-    # 프로필 테이블에 체중이 없다 — 최신 몸무게는 body_weight_history 마지막 측정값 (구 §4.1 규약)
     latest_weight = mysql.fetch_all(
         select(BodyWeightHistory.weight)
         .where(BodyWeightHistory.user_id == uid)
@@ -55,7 +49,7 @@ def get_profile(user_id: str) -> dict:
 
 
 def get_body_weights(user_id: str, days: int) -> list[dict]:
-    """체중 측정 이력 (구 §4.4) — measuredAt 오름차순. 챗봇 체중·BMI 차트용."""
+    """기간 내 체중 측정 이력 측정 시각 오름차순 조회"""
     cutoff = (clock.now_utc() - timedelta(days=days)).replace(tzinfo=None)
     rows = mysql.fetch_all(
         select(BodyWeightHistory.measured_at, BodyWeightHistory.weight)
