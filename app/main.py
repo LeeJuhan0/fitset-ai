@@ -98,9 +98,7 @@ def _level_for(status: int) -> int:
 @app.get("/health", include_in_schema=False)
 @app.get("/ai/v1/health", include_in_schema=False)
 async def health() -> JSONResponse:
-    """프로세스 생존과 Postgres 연결 상태 헬스체크"""
-    if postgres.is_configured() and not await asyncio.to_thread(postgres.ping):
-        return JSONResponse(status_code=503, content={"status": "postgres unavailable"})
+    """프로세스 생존만 확인하는 liveness 헬스체크"""
     return JSONResponse(content={"status": "ok"})
 
 

@@ -61,3 +61,12 @@ def test_trace_id_is_attached_to_access_log(client, caplog):
 def test_uvicorn_access_logger_disabled():
     # 같은 요청이 두 줄로 남지 않도록 서버 기본 액세스 로그를 끈다
     assert logging.getLogger("uvicorn.access").disabled is True
+
+
+def test_health_ignores_postgres_outage(client, monkeypatch):
+    from app.clients import postgres
+    monkeypatch.setattr(postgres, "is_configured", lambda: True)
+    monkeypatch.setattr(postgres, "ping", lambda: False)
+    assert client.get("/health").status_code == 200
+    assert client.get("/ai/v1/health").status_code == 200
+
