@@ -1,8 +1,3 @@
-"""Bedrock 클라이언트 — LLM(converse)과 임베딩(Cohere Embed v4). core 레이어.
-
-동기 함수로 제공한다 — async 서비스에서는 asyncio.to_thread로 감싸 호출한다.
-임베딩 모델은 global.cohere.embed-v4:0 고정 (모델 교체 시 전량 재임베딩 필수 — CLAUDE.md).
-"""
 import json
 import logging
 from functools import lru_cache
@@ -17,16 +12,15 @@ logger = logging.getLogger("fitset")
 
 @lru_cache
 def _runtime():
+    """루틴 경로용 Bedrock 런타임 클라이언트 전역 싱글턴"""
     settings = get_settings()
     return boto3.client(
         "bedrock-runtime",
         region_name=settings.aws_region,
         config=Config(
             retries={"max_attempts": settings.bedrock_max_attempts, "mode": "adaptive"},
-            # 호출 1회의 스레드 점유 상한 — 기본값(read 60s × 5회)이면 클라가 끊은 뒤에도 스레드가 물린다
             connect_timeout=settings.bedrock_connect_timeout,
             read_timeout=settings.bedrock_read_timeout,
-            # 커넥션 풀을 executor 스레드 수와 맞춘다
             max_pool_connections=settings.executor_max_workers,
         ),
     )
@@ -34,13 +28,7 @@ def _runtime():
 
 @lru_cache
 def chat_runtime():
-    """채팅 에이전트용 bedrock-runtime 클라이언트 — LangGraph ChatBedrockConverse에 주입한다.
-
-    주입하지 않으면 langchain이 기본 설정(read 60s, 재시도 다수)으로 자체 클라이언트를
-    만들어 이 모듈의 타임아웃 규약이 통째로 빠진다 — 클라가 30s에 포기한 요청을
-    서버가 수 분간 계속 굴리게 된다(감사 F15). 채팅 턴은 툴콜 왕복이 있어
-    루틴 경로(8s)보다 여유 있는 read 상한을 따로 쓴다.
-    """
+    """채팅 에이전트용 Bedrock 런타임 클라이언트 전역 싱글턴"""
     settings = get_settings()
     return boto3.client(
         "bedrock-runtime",
@@ -55,7 +43,7 @@ def chat_runtime():
 
 
 def complete(system: str, user: str, max_tokens: int | None = None) -> str:
-    """LLM 1회 호출 — converse API. 응답 텍스트를 그대로 반환한다."""
+    """Converse API 단발 호출 후 응답 텍스트 반환"""
     settings = get_settings()
     response = _runtime().converse(
         modelId=settings.llm_model_id,
@@ -67,10 +55,7 @@ def complete(system: str, user: str, max_tokens: int | None = None) -> str:
 
 
 def try_complete(purpose: str, system: str, user: str, max_tokens: int | None = None) -> str | None:
-    """complete의 폴백용 변형 — 실패하면 원인을 로그에 남기고 None을 돌려준다.
-
-    폴백이 있는 호출부가 try 없이 가드 절(if 결과 is None)로 강등 경로를 타게 한다.
-    """
+    """LLM 호출 실패 시 로그 기록 후 None 반환"""
     try:
         return complete(system, user, max_tokens)
     except Exception:
@@ -79,7 +64,7 @@ def try_complete(purpose: str, system: str, user: str, max_tokens: int | None = 
 
 
 def embed_query(text: str) -> list[float]:
-    """쿼리 1건 임베딩 — input_type=search_query (문서 임베딩과 짝을 이루는 검색용)."""
+    """검색 쿼리 1건 Cohere 임베딩 벡터 생성"""
     settings = get_settings()
     body = {
         "texts": [text],
@@ -92,7 +77,7 @@ def embed_query(text: str) -> list[float]:
 
 
 def try_embed_query(text: str) -> list[float] | None:
-    """embed_query의 폴백용 변형 — 실패하면 원인을 로그에 남기고 None을 돌려준다."""
+    """쿼리 임베딩 실패 시 로그 기록 후 None 반환"""
     try:
         return embed_query(text)
     except Exception:

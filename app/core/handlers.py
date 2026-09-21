@@ -1,4 +1,3 @@
-"""전역 예외 핸들러. 예외를 팀 규약 실패 응답으로 번역한다."""
 import logging
 
 from fastapi import FastAPI, Request, status
@@ -27,7 +26,7 @@ def _error_response(
     message: str,
     details: list | None = None,
 ) -> JSONResponse:
-    """실패 응답 JSON을 조립한다."""
+    """traceId 포함 팀 규약 실패 응답 JSON 조립"""
     return JSONResponse(
         status_code=status_code,
         content={
@@ -38,10 +37,7 @@ def _error_response(
 
 
 async def _domain_exception_handler(request: Request, exc: DomainError) -> JSONResponse:
-    """도메인 예외를 시맨틱 코드 그대로 실패 응답으로 번역한다.
-
-    4xx는 정상 흐름이라 조용히, 5xx는 서버측 장애(SSM·내부 API 등)라 원인 체인을 남긴다.
-    """
+    """도메인 예외를 상태 코드별 실패 응답으로 변환"""
     if exc.status_code >= 500:
         logger.error(
             "domain error %s: %s %s", exc.code, request.method, request.url.path,
@@ -51,7 +47,7 @@ async def _domain_exception_handler(request: Request, exc: DomainError) -> JSONR
 
 
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    """HTTPException과 라우트 없음 404를 실패 응답으로 변환한다."""
+    """HTTP 예외와 라우트 없음을 실패 응답으로 변환"""
     if isinstance(exc.detail, dict) and "code" in exc.detail:
         return _error_response(
             request,
@@ -67,7 +63,7 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
 async def _validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """요청 스키마 검증 실패를 400 응답으로 변환한다."""
+    """요청 스키마 검증 실패를 400 응답으로 변환"""
     details = [
         {
             "field": ".".join(str(part) for part in err["loc"] if part != "body"),
@@ -80,7 +76,7 @@ async def _validation_exception_handler(
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """예상 못 한 예외를 로그에 남기고 500 응답으로 변환한다."""
+    """미처리 예외 로그 기록 후 500 응답 변환"""
     logger.exception(
         "unhandled error: %s %s", request.method, request.url.path,
         exc_info=exc, extra={"trace_id": getattr(request.state, "trace_id", "-")},
@@ -92,7 +88,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """전역 예외 핸들러를 앱에 일괄 등록한다."""
+    """전역 예외 핸들러 4종 앱 일괄 등록"""
     app.add_exception_handler(DomainError, _domain_exception_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
