@@ -1,4 +1,3 @@
-"""채팅 도메인 예외. 베이스와 공통 예외는 core/exceptions.py에 있다."""
 from app.core.exceptions import DomainError
 
 
@@ -9,8 +8,6 @@ class ThreadNotFoundError(DomainError):
 
 
 class ThreadForbiddenError(DomainError):
-    # 현 chat_threads PK가 (user_id, thread_id)라 남의 스레드는 조회 자체가 비어 404가 된다.
-    # 계약(클라이언트 API 명세 §4)에는 남아있어 예약해 두되, 실제 발생 경로는 없다
     status_code = 403
     code = "THREAD_FORBIDDEN"
     default_message = "접근할 수 없는 대화 스레드입니다."

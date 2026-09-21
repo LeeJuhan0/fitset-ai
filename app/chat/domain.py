@@ -1,8 +1,3 @@
-"""채팅 도메인 — DynamoDB 모델(PynamoDB)과 I/O 없는 함수·상수.
-
-ULID 생성, TTL 계산, 스레드 레코드(만료 판정 포함), 요약 시점 판정을 모은다.
-모델은 저장 형태의 선언일 뿐이다 — 읽기·쓰기 호출은 repository가 담당한다 (계층 규칙).
-"""
 import os
 import threading
 from datetime import datetime, timedelta
@@ -15,25 +10,20 @@ from app.core.dynamo import DynamoModel
 
 
 class StreamKind(StrEnum):
-    """전송 스트림 의미 이벤트 어휘 — service가 내고 router가 SSE 프레임으로 직렬화한다."""
-
     DELTA = "delta"
     DONE = "done"
     ERROR = "error"
 
-# Crockford Base32 — ULID 표준 알파벳 (I·L·O·U 제외로 오독 방지)
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-ULID_TIME_CHARS = 10     # 48비트 밀리초 타임스탬프
-ULID_RANDOM_CHARS = 16   # 80비트 난수
+ULID_TIME_CHARS = 10
+ULID_RANDOM_CHARS = 16
 
-# 단조 증가 보장용 — 같은 밀리초 안에서는 난수부가 순서를 정해버려 한 요청에서 만든
-# 유저·어시스턴트 메시지의 SK 순서가 뒤집힐 수 있다. 직전 값보다 항상 크게 만든다.
 g_last_ulid = ""
 g_ulid_lock = threading.Lock()
 
 
 def _base32(value: int, length: int) -> str:
-    """정수를 Crockford Base32 고정 길이 문자열로 인코딩한다."""
+    """정수를 Crockford Base32 고정 길이 문자열로 인코딩"""
     chars = []
     for _ in range(length):
         value, remainder = divmod(value, 32)
@@ -42,7 +32,7 @@ def _base32(value: int, length: int) -> str:
 
 
 def _increment(value: str) -> str:
-    """Base32 문자열 +1 — 자리올림이 나면 앞자리로 넘긴다."""
+    """Base32 문자열 1 증가 자리올림 처리"""
     chars = list(value)
     for index in range(len(chars) - 1, -1, -1):
         position = CROCKFORD.index(chars[index])
@@ -54,12 +44,7 @@ def _increment(value: str) -> str:
 
 
 def new_ulid(moment: datetime | None = None) -> str:
-    """ULID 생성 — 앞 48비트가 밀리초라 사전순 정렬이 곧 시간순 정렬(SK 겸용).
-
-    같은 밀리초에 두 번 부르면 난수부 대소가 무작위라 정렬이 뒤집힌다. 직전 발급값보다
-    작거나 같으면 +1 해서 **단조 증가**를 보장한다 — 한 요청에서 만드는 유저·어시스턴트
-    메시지가 항상 이 순서로 조회되어야 하기 때문.
-    """
+    """밀리초 시각 내장 시간순 정렬 가능 ULID 생성"""
     global g_last_ulid
     milliseconds = int((moment or now_utc()).timestamp() * 1000)
     randomness = int.from_bytes(os.urandom(10), "big")
@@ -72,18 +57,11 @@ def new_ulid(moment: datetime | None = None) -> str:
 
 
 def ttl_epoch(last_message_at: datetime, days: int) -> int:
-    """메시지 보존 기한 — 마지막 활동 + N일의 epoch 초. 메시지 수신마다 갱신해 타이머를 리셋한다."""
+    """마지막 활동 기준 메시지 보존 기한 epoch 초 계산"""
     return int((last_message_at + timedelta(days=days)).timestamp())
 
 
 class ThreadRecord(DynamoModel):
-    """chat_threads 아이템 1건 — 저장 형태의 정본 (document-structure.md와 1:1).
-
-    PK=user_id, SK=thread_id, TTL 속성=expires_at. None 필드는 속성 자체를 빼 sparse로
-    저장된다 — NULL 타입으로 저장하면 if_not_exists가 NULL을 '있는 값'으로 보고 title을
-    영영 채우지 못한다. 읽는 쪽은 전부 null 허용이라 부재와 null이 동치다.
-    """
-
     class Meta:
         table_name = "chat_threads"
 
@@ -98,7 +76,7 @@ class ThreadRecord(DynamoModel):
 
     @classmethod
     def open(cls, user_id: str, now: datetime, ttl_days: int) -> "ThreadRecord":
-        """새 스레드 조립 — 빈 스레드도 방치되면 만료되도록 생성 시각 기준 보존 기한을 건다."""
+        """생성 시각 기준 보존 기한 포함 새 스레드 조립"""
         return cls(
             user_id=user_id,
             thread_id=new_ulid(now),
@@ -107,22 +85,13 @@ class ThreadRecord(DynamoModel):
         )
 
     def is_expired(self, now: datetime) -> bool:
-        """만료 판정 — 메시지 보존 기한(마지막 활동 + 14일) 경과.
-
-        만료돼도 스레드 항목은 지우지 않는다 — 목록에 needsDeletion으로 알리고
-        메시지만 지연 삭제하며, 항목 삭제는 유저의 DELETE 요청(§4)만 한다.
-        """
+        """메시지 보존 기한 경과 여부 만료 판정"""
         if self.expires_at is None:
             return False
         return self.expires_at <= int(now.timestamp())
 
 
 class MessageRecord(DynamoModel):
-    """chat_messages 아이템 1건 — PK=thread_id, SK=message_id(ULID, 사전순=시간순).
-
-    payload는 response_scheme별 자유 구조라 스키마 없는 맵으로 둔다 (document-structure §2).
-    """
-
     class Meta:
         table_name = "chat_messages"
 
@@ -137,8 +106,6 @@ class MessageRecord(DynamoModel):
 
 
 class UserSummaryRecord(DynamoModel):
-    """user_summaries 아이템 1건 — PK=user_id, TTL 없는 영속 항목."""
-
     class Meta:
         table_name = "user_summaries"
 
@@ -149,22 +116,17 @@ class UserSummaryRecord(DynamoModel):
 
 
 def _activity_key(thread: ThreadRecord) -> tuple[str, str]:
-    """정렬 키 — 마지막 활동, 동률이면 thread_id(ULID에 생성 시각 내장).
-
-    한 번도 안 쓴 스레드는 last_message_at이 전부 null이라 키가 동률이 된다. 이때
-    thread_id로 갈라주지 않으면 정렬이 입력 순서에 좌우돼 **목록 순서와 read-repair
-    잘림 대상이 요청마다 달라진다**.
-    """
+    """마지막 활동 시각과 스레드 아이디 정렬 키"""
     return thread.last_message_at or "", thread.thread_id
 
 
 def sorted_by_activity(threads: list[ThreadRecord]) -> list[ThreadRecord]:
-    """최근 활동순 정렬 — 만료 스레드도 유저가 지울 때까지 목록·정원에 남는다(§2)."""
+    """스레드 목록 최근 활동순 내림차순 정렬"""
     return sorted(threads, key=_activity_key, reverse=True)
 
 
 def fallback_title(content: str, max_length: int) -> str:
-    """제목 생성 LLM 실패 시 폴백 — 첫 발화 앞 N자."""
+    """제목 생성 실패 시 첫 발화 앞부분 폴백 제목"""
     stripped = " ".join(content.split())
     if len(stripped) <= max_length:
         return stripped
@@ -172,19 +134,19 @@ def fallback_title(content: str, max_length: int) -> str:
 
 
 def needs_summary(count: int, threshold: int) -> bool:
-    """미요약 메시지가 임계치에 도달했는지 — 백그라운드 재요약 트리거."""
+    """미요약 메시지 수 임계치 도달 여부 판정"""
     return count >= threshold
 
 
 def _payload_dict(payload) -> dict | None:
-    """payload 맵 → 순수 dict. 모델은 대입·조회 모두 MapAttribute로 들고 있다."""
+    """페이로드 맵 속성을 순수 dict 로 변환"""
     if isinstance(payload, MapAttribute):
         return payload.as_dict()
     return payload
 
 
 def to_message_view(message: MessageRecord) -> dict:
-    """저장 항목 → 응답용 dict. user 메시지는 §7 계약대로 scheme·payload를 null로 강제한다."""
+    """저장 메시지를 응답용 dict 로 변환"""
     is_user = message.role == "user"
     return {
         "message_id": message.message_id,
