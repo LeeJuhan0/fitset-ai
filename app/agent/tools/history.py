@@ -1,14 +1,3 @@
-"""운동 기록 직접 조회 툴 — 템플릿 기반 NL2SQL (이슈 #36).
-
-LLM에게 SQL을 짓게 하지 않는다 — 조회 4종은 backend_schema 엔티티 기반 select()로
-서버가 고정해 두고, LLM은 템플릿 이름과 파라미터(종목·기간·상위 N)만 고른다.
-값은 전부 바인딩 파라미터로만 주입되므로 인젝션 표면이 없고, 컬럼·테이블명은
-엔티티 선언(ERD 사본)과 어긋나면 임포트 시점에 드러난다.
-
-user_id는 툴 스키마에 없다 — JWT에서 뽑은 값을 그래프가 주입한다 (사칭 방지,
-tools/__init__ 규약). 종목명은 로컬 마스터 206종으로 slug를 해석해 통과한 것만
-바인딩한다 (exercise 툴과 동일 패턴).
-"""
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -25,17 +14,16 @@ from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutH
 
 logger = logging.getLogger("fitset")
 
-# 유저에게 그대로 읽어줄 수 있는 행 수 상한 — LLM 컨텍스트 낭비 방지
 MAX_ROWS = 50
 
 
 def _since(days: int) -> datetime:
-    """기간 하한 — DB가 naive UTC 저장이라 tz를 벗겨 비교한다 (repository들과 동일 규약)."""
+    """조회 기간 하한 naive UTC 시각 계산"""
     return (clock.now_utc() - timedelta(days=days)).replace(tzinfo=None)
 
 
 def _user_sets(user_id: bytes, days: int) -> Select:
-    """세트 조회의 공통 골격 — 유저·기간으로 좁힌 history→exercise→set 조인."""
+    """유저와 기간으로 좁힌 세트 조회 공통 조인 골격"""
     return (
         select()
         .select_from(WorkoutHistory)
@@ -47,9 +35,8 @@ def _user_sets(user_id: bytes, days: int) -> Select:
 
 
 def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
-    """최근 N일 날짜별 세션 수·순수 운동 시간."""
+    """최근 기간 날짜별 세션 수와 운동 시간 집계"""
     workout_date = func.date(WorkoutHistory.started_at).label("workout_date")
-    # 실제 DB 는 활동 시간을 active_duration 컬럼에 직접 저장한다 (2026-08-28 실스키마 확인)
     active = WorkoutHistory.active_duration_seconds
     return (
         select(
@@ -65,7 +52,7 @@ def _session_summary(user_id: bytes, days: int, limit: int, slug: str | None) ->
 
 
 def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
-    """특정 종목의 최근 세트별 실측값."""
+    """특정 종목 최근 세트별 실측값 조회"""
     return (
         _user_sets(user_id, days)
         .with_only_columns(
@@ -82,7 +69,7 @@ def _exercise_sets(user_id: bytes, days: int, limit: int, slug: str | None) -> S
 
 
 def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
-    """특정 종목 최고 중량·Epley e1RM 최대치 (무게 추천.md와 같은 공식)."""
+    """특정 종목 최고 중량과 추정 1RM 최대치 조회"""
     return (
         _user_sets(user_id, days)
         .with_only_columns(
@@ -96,7 +83,7 @@ def _exercise_pr(user_id: bytes, days: int, limit: int, slug: str | None) -> Sel
 
 
 def _volume_by_exercise(user_id: bytes, days: int, limit: int, slug: str | None) -> Select:
-    """기간 내 종목별 총볼륨(무게×횟수) 상위."""
+    """기간 내 종목별 총볼륨 상위 조회"""
     total_volume = func.sum(WorkoutHistorySet.weight * WorkoutHistorySet.reps).label("total_volume_kg")
     return (
         _user_sets(user_id, days)
@@ -107,7 +94,6 @@ def _volume_by_exercise(user_id: bytes, days: int, limit: int, slug: str | None)
     )
 
 
-# 템플릿 레지스트리 — (select 빌더, 종목 필요 여부)
 _TEMPLATES: dict[str, tuple] = {
     "session_summary": (_session_summary, False),
     "exercise_sets": (_exercise_sets, True),
@@ -135,7 +121,7 @@ class QueryWorkoutHistory(BaseModel):
 
 
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
-    """템플릿을 골라 실행하고 (LLM에 돌려줄 결과 표, None)을 반환한다. payload 없음(§7 text)."""
+    """템플릿 선택 실행 후 결과 표 텍스트 반환"""
     if not mysql.is_configured():
         return (
             "기록 DB 직접 조회가 이 환경에 설정되어 있지 않습니다. "
@@ -163,7 +149,6 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     stmt = builder(mysql.uuid_bytes(user_id), query.days, query.limit, slug)
     rows = await asyncio.to_thread(mysql.fetch_all, stmt)
     if not rows or all(value is None for value in rows[0].values()):
-        # 집계 템플릿은 기록이 없어도 NULL 1행이 온다 — 빈 결과와 같게 취급
         return (
             f"최근 {query.days}일 조회 결과가 없습니다. "
             "기록이 없다는 사실을 그대로 말하고, 수치를 지어내지 않는다."
@@ -172,7 +157,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
 
 
 def _render(query: QueryWorkoutHistory, slug: str | None, rows: list[dict]) -> str:
-    """행 목록 → LLM이 인용할 결과 표 텍스트. 숫자는 조회 결과만 싣는다."""
+    """조회 행 목록을 LLM 인용용 표 텍스트로 변환"""
     header = f"[{query.template}] 최근 {query.days}일"
     if slug is not None:
         header += f" · 종목 {exercise_catalog.exercise_name(slug) or slug} ({slug})"
@@ -187,7 +172,7 @@ def _render(query: QueryWorkoutHistory, slug: str | None, rows: list[dict]) -> s
 
 
 def _cell(value) -> str:
-    """셀 값 문자열화 — MySQL Decimal은 불필요한 소수 없이 표기한다."""
+    """셀 값 문자열화 Decimal 불필요 소수 제거"""
     if value is None:
         return "-"
     if isinstance(value, float) or str(type(value).__name__) == "Decimal":

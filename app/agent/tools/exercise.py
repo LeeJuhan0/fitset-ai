@@ -1,12 +1,3 @@
-"""운동 가이드 툴 — 종목 수행 방법 설명 + 가이드 영상 URL.
-
-종목 식별은 slug다. LLM이 slug를 지어낼 수 있으므로 **로컬 종목 마스터(206종)로 먼저
-검증·해석**하고, 통과한 slug만 내부 API로 상세를 조회한다 (guardrails와 같은 취지 —
-payload는 실존 데이터로만 채운다).
-
-영상은 공개 CloudFront라 URL에 만료가 없다(2026-08-06 개정 — presign 폐기).
-재생 실패 시 클라는 클라이언트 API 명세 §6-B로 재발급받는다.
-"""
 import asyncio
 import logging
 
@@ -30,7 +21,7 @@ class GetExerciseGuide(BaseModel):
 
 
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
-    """종목 가이드를 조회해 (LLM에 돌려줄 설명 근거, exerciseGif payload)를 반환한다."""
+    """종목 가이드 조회 후 설명 근거와 영상 페이로드 반환"""
     slug = exercise_catalog.resolve_exercise_slug(args.get("exercise", ""))
     if slug is None:
         hints = exercise_catalog.suggest_exercises(args.get("exercise", ""))
@@ -47,7 +38,6 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     try:
         video = await exercises_service.get_video(slug)
     except DomainError:
-        # 영상이 없어도 설명은 할 수 있다 — payload만 비운다
         logger.info("guide video unavailable: %s", slug)
         video = None
 
@@ -56,7 +46,6 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
     try:
         detail = await asyncio.to_thread(exercise_catalog.get_exercise, slug)
     except DomainError as exc:
-        # 기록 DB가 죽어도 로컬 마스터 이름만으로 답변은 가능하다
         logger.warning("exercise detail lookup failed: %s", slug, exc_info=True)
         detail_fault = failures.is_server_fault(exc)
 
@@ -77,7 +66,6 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         )
 
     payload = {
-        # 백엔드 마스터 UUID — 클라의 종목 상세 이동 키 (카탈로그 미스면 null)
         "exerciseId": exercise_catalog.exercise_id(slug),
         "slug": slug,
         "exerciseName": name,

@@ -1,9 +1,3 @@
-"""루틴 추천 툴 — 기존 루틴 워크로드(POST /ai/v1/routines)를 그대로 재사용한다.
-
-챗봇이 루틴을 새로 구성하지 않는다. routines.service.generate_routine을 호출해
-룰 필터 → 임베딩 랭킹 → LLM 최종 선택 파이프라인을 타므로, 홈 화면 생성 결과와
-챗봇 추천 결과가 같은 규칙을 따른다. payload도 클라이언트 API 명세 §1과 동일 구조다.
-"""
 import logging
 from typing import Literal
 
@@ -31,8 +25,6 @@ class RecommendRoutine(BaseModel):
     유저가 특정 목적을 말하면 context에 그대로 옮긴다.
     """
 
-    # 세 필수 인자는 추측 금지 — 대화에서 알 수 없으면 시스템 프롬프트 규칙에 따라
-    # 호출 전에 모르는 항목을 질문 하나로 모아 되묻는다 (직렬 3회 왕복 방지)
     level: Level = Field(description="유저 수준. 대화에서 파악한 값만 쓴다")
     muscle_groups: list[Muscle] = Field(min_length=1, max_length=12, description="타겟 부위. 대화에서 파악한 값만 쓴다")
     minutes: int = Field(ge=10, le=180, description="목표 운동 시간(분). 대화에서 파악한 값만 쓴다")
@@ -44,9 +36,7 @@ class RecommendRoutine(BaseModel):
 
 
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
-    """루틴을 생성해 (LLM에 돌려줄 요약, routine payload)를 반환한다."""
-    # 툴 스키마(RecommendRoutine)로 먼저 검증해 기본값을 채운다 — LLM이 선택 필드를
-    # 생략하면 곧장 RoutineGenerateRequest를 만들 때 필수 필드 누락으로 터진다
+    """루틴 생성 서비스 호출 후 요약과 페이로드 반환"""
     params = RecommendRoutine(**args)
     request = RoutineGenerateRequest(
         level=params.level,
@@ -61,7 +51,6 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         if failures.is_server_fault(exc):
             logger.warning("recommend_routine server fault: %s", exc.code)
             return failures.SERVER_FAULT_NOTE, None
-        # 후보 없음·가드레일 차단은 정상적인 결과다 — 대화를 끊지 않고 LLM이 사유를 설명하게 한다
         logger.info("recommend_routine declined: %s", exc.code)
         return f"루틴을 만들지 못했습니다. 사유: {exc.message}", None
 

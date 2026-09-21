@@ -1,8 +1,3 @@
-"""차트 툴 — 기록·추이 질문을 §7 chart payload로 만든다.
-
-조회·집계는 charts 패키지(service·domain)가 하고 여기선 LLM 입출력 어댑터만 맡는다 —
-인자 스키마(DrawChart), 종목명 해석과 재호출 유도, 실패의 LLM 지시문 변환.
-"""
 import logging
 from typing import Literal
 
@@ -50,12 +45,11 @@ class DrawChart(BaseModel):
 
 
 async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
-    """차트를 만들어 (LLM에 돌려줄 요약, chart payload)를 반환한다."""
+    """차트 페이로드 생성 후 요약과 아티팩트 반환"""
     request = DrawChart(**args)
 
     exercise_slug = None
     exercise_label = None
-    # 종목 해석 실패는 "기록 부족"과 다르다 — 후보를 돌려줘 LLM이 정확한 이름으로 재호출하게 한다
     if request.metric == "exercisePr":
         exercise_slug = exercise_catalog.resolve_exercise_slug(request.exercise or "")
         if exercise_slug is None:
