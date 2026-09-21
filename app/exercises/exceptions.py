@@ -1,4 +1,3 @@
-"""운동 종목 도메인 예외. 베이스와 공통 예외는 core/exceptions.py에 있다."""
 from app.core.exceptions import DomainError
 
 
