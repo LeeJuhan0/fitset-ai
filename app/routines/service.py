@@ -8,9 +8,7 @@ from app.core import llm, ratelimit
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, RateLimitedError
 from app.exercises import repository as exercise_catalog
-from app.routines import domain, prompts
-from app.exercises.repository import get_exercise_meta
-from app.routines import repository
+from app.routines import domain, prompts, repository
 from app.routines.exceptions import NoRoutineCandidateError, UnsafeConstraintError
 from app.routines.schemas import (
     RoutineExerciseOut,
@@ -44,7 +42,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         logger.warning("guardrail blocked recommendation: %s", unsafe_constraints)
         raise UnsafeConstraintError()
 
-    meta = get_exercise_meta()
+    meta = exercise_catalog.get_exercise_meta()
     stats = domain.build_e1rm_stats(workouts, meta)
     ratio = domain.bodyweight_ratio(workouts, meta)
     home_only = ratio is not None and ratio >= settings.bodyweight_home_ratio
