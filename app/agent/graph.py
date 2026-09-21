@@ -1,19 +1,25 @@
 import logging
 import operator
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, TypedDict
 
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.graph.state import CompiledStateGraph
 
 from app.agent import guardrails, tools
 from app.core import llm
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
+
+AGENT_NODE = "agent"
+TOOLS_NODE = "tools"
 
 
 class GraphEvent(StrEnum):
@@ -28,12 +34,11 @@ class ChatState(TypedDict):
     tool_turns: int
 
 
+@dataclass(frozen=True)
 class AgentResult:
-    def __init__(self, content: str, response_scheme: str, payload: dict | None):
-        """응답 본문 스킴 페이로드 필드 초기화"""
-        self.content = content
-        self.response_scheme = response_scheme
-        self.payload = payload
+    content: str
+    response_scheme: str
+    payload: dict | None
 
 
 def _model_provider(model_id: str) -> str:
@@ -45,7 +50,7 @@ def _model_provider(model_id: str) -> str:
 
 
 @lru_cache
-def _model():
+def _model() -> Runnable:
     """툴 바인딩된 Bedrock 채팅 모델 전역 싱글턴"""
     settings = get_settings()
     model = ChatBedrockConverse(
@@ -88,19 +93,19 @@ def _route(state: ChatState) -> str:
         logger.warning("tool turn limit reached, ending turn")
         return END
     if getattr(state["messages"][-1], "tool_calls", None):
-        return "tools"
+        return TOOLS_NODE
     return END
 
 
 @lru_cache
-def _graph():
+def _graph() -> CompiledStateGraph:
     """에이전트 툴 루프 그래프 컴파일 전역 재사용"""
     builder = StateGraph(ChatState)
-    builder.add_node("agent", _agent_node)
-    builder.add_node("tools", _tools_node)
-    builder.add_edge(START, "agent")
-    builder.add_conditional_edges("agent", _route, {"tools": "tools", END: END})
-    builder.add_edge("tools", "agent")
+    builder.add_node(AGENT_NODE, _agent_node)
+    builder.add_node(TOOLS_NODE, _tools_node)
+    builder.add_edge(START, AGENT_NODE)
+    builder.add_conditional_edges(AGENT_NODE, _route, {TOOLS_NODE: TOOLS_NODE, END: END})
+    builder.add_edge(TOOLS_NODE, AGENT_NODE)
     return builder.compile()
 
 
@@ -168,12 +173,12 @@ async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMes
     """대화 한 턴 스트리밍 실행 본문 조각과 최종 결과 방출"""
     inputs = _initial_state(user_id, system_prompt, history)
     final_state: dict = {}
-    async for mode, payload in _graph().astream(inputs, stream_mode=["messages", "values"]):
+    async for mode, data in _graph().astream(inputs, stream_mode=["messages", "values"]):
         if mode == "values":
-            final_state = payload
+            final_state = data
             continue
-        chunk, metadata = payload
-        if metadata.get("langgraph_node") != "agent":
+        chunk, metadata = data
+        if metadata.get("langgraph_node") != AGENT_NODE:
             continue
         text = _chunk_text(chunk)
         if text:
