@@ -1,7 +1,3 @@
-"""루틴 도메인 요청/응답 모델 — 클라이언트 API 명세 §1 (POST /ai/v1/routines).
-
-내부 snake_case ↔ 와이어 camelCase는 CamelModel alias가 처리한다. 로직·I/O 금지.
-"""
 from typing import Literal
 
 from pydantic import Field
@@ -16,7 +12,6 @@ Muscle = Literal[
 
 
 class RoutineGenerateRequest(CamelModel):
-    # goal은 요청 필드가 아니다 — 내부 API 프로필 조회값을 쓴다 (2026-07-29 확정, 명세 §1)
     level: Level
     muscle_groups: list[Muscle] = Field(min_length=1, max_length=12)
     minutes: int = Field(ge=10, le=180)
@@ -25,32 +20,23 @@ class RoutineGenerateRequest(CamelModel):
 
 
 class RoutineSetOut(CamelModel):
-    """세트 1개 — 종목 수행 방식(exerciseType)에 따라 채워지는 필드가 갈린다 (2026-08-05).
-
-    WEIGHT_AND_REPS: weight + reps · REPS_ONLY: reps · DURATION: durationSeconds.
-    **세 필드 모두 not null이고, 해당 없는 자리는 0이다** — 클라가 null 분기 없이
-    0으로 판별하도록(2026-08-05 확정). 백엔드 저장 DTO도 세 필드가 모두 선택이라 그대로 실린다.
-    """
-
     order_index: int
-    weight: float   # kg — 맨몸·시간 종목은 0
-    reps: int       # 시간 종목(플랭크·월싯 등)은 0
-    duration_seconds: int   # 시간 종목만 값 — 그 외 0
+    weight: float
+    reps: int
+    duration_seconds: int
 
 
 class RoutineExerciseOut(CamelModel):
-    # 백엔드 마스터 UUID — 클라 저장(POST /api/v1/routines)·종목 상세 이동 키.
-    # 카탈로그 캐시 미스면 null (클라가 자체 종목 마스터로 slug 매핑 폴백)
     exercise_id: str | None
-    slug: str              # AI 서버 내부 식별자 — 가이드·영상 재발급 호출 키
-    exercise_name: str     # 한글명 (종목 마스터 name_ko)
-    thumbnail_url: str     # CDN URL (카탈로그) — 미스 시 루틴 적재값
+    slug: str
+    exercise_name: str
+    thumbnail_url: str
     order_index: int
     sets: list[RoutineSetOut]
 
 
 class RoutineOut(CamelModel):
-    slug: str | None       # 베이스 루틴 참조 (routines 테이블 slug)
+    slug: str | None
     name: str
     estimated_minutes: int
     exercises: list[RoutineExerciseOut]
