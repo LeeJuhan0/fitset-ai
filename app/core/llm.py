@@ -3,6 +3,7 @@ import logging
 from functools import lru_cache
 
 import boto3
+from botocore.client import BaseClient
 from botocore.config import Config
 
 from app.core.config import get_settings
@@ -11,7 +12,7 @@ logger = logging.getLogger("fitset")
 
 
 @lru_cache
-def _runtime():
+def _runtime() -> BaseClient:
     """루틴 경로용 Bedrock 런타임 클라이언트 전역 싱글턴"""
     settings = get_settings()
     return boto3.client(
@@ -27,7 +28,7 @@ def _runtime():
 
 
 @lru_cache
-def chat_runtime():
+def chat_runtime() -> BaseClient:
     """채팅 에이전트용 Bedrock 런타임 클라이언트 전역 싱글턴"""
     settings = get_settings()
     return boto3.client(

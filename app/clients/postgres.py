@@ -1,7 +1,7 @@
 import logging
 from functools import lru_cache
 
-from sqlalchemy import URL, Select, create_engine, text
+from sqlalchemy import URL, Engine, Select, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,7 @@ def url() -> URL:
 
 
 @lru_cache
-def _engine():
+def _engine() -> Engine:
     """읽기 전용 Postgres 엔진 커넥션 풀 전역 싱글턴"""
     settings = get_settings()
     return create_engine(
