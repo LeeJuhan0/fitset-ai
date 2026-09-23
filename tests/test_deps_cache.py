@@ -1,6 +1,6 @@
 """의존성 캐시 검증 — 라우터 공통 가드 + 파라미터 Depends 이중 선언 시 JWT 검증 횟수.
 
-get_current_user_id는 라우터 dependencies와 핸들러 파라미터 양쪽에 선언돼 있다(deps.py).
+get_current_user_id는 라우터 dependencies와 핸들러 파라미터 양쪽에 선언돼 있다(auth/deps.py).
 FastAPI가 요청 스코프에서 같은 의존성을 캐시해 검증이 1회만 도는지 실측한다.
 호출 횟수는 auth.verify_token을 카운터로 대체해 센다.
 
@@ -10,9 +10,9 @@ import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
-from app import deps
+from app.auth import deps
 from app.chat import repository
-from app.core import auth
+from app.auth import service as auth
 from app.main import app
 
 HEADERS = {"Authorization": "Bearer dummy"}

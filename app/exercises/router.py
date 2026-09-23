@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app import deps
+from app.auth.deps import get_current_user_id
 from app.core.schemas import ApiResponse
 from app.exercises import service
 from app.exercises.schemas import ExerciseVideoOut
@@ -8,7 +9,7 @@ from app.exercises.schemas import ExerciseVideoOut
 router = APIRouter(
     prefix="/ai/v1",
     tags=["exercises"],
-    dependencies=[Depends(deps.get_current_user_id)],
+    dependencies=[Depends(get_current_user_id)],
 )
 
 

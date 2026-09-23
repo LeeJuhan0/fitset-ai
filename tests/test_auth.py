@@ -8,9 +8,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from botocore.exceptions import ClientError
 
-from app.core import auth
+from app.auth import repository as auth_repository
+from app.auth import service as auth
 from app.core.config import Settings
-from app.core.exceptions import DomainError, UnauthorizedError
+from app.auth.exceptions import UnauthorizedError
+from app.core.exceptions import DomainError
 
 _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _PUBLIC_PEM = _PRIVATE_KEY.public_key().public_bytes(
@@ -33,16 +35,16 @@ def _token(key=_PRIVATE_KEY, **overrides) -> str:
 @pytest.fixture
 def pem_mode(monkeypatch):
     """PEM 우회 경로(로컬 개발) — SSM 없이 주입된 공개키로 검증한다."""
-    monkeypatch.setattr(auth, "get_settings", lambda: Settings(jwt_public_key_pem=_PUBLIC_PEM))
+    monkeypatch.setattr(auth_repository, "get_settings", lambda: Settings(jwt_public_key_pem=_PUBLIC_PEM))
 
 
 @pytest.fixture
 def ssm_mode(monkeypatch):
     """SSM 경로(배포) — 파라미터 조회를 스텁으로 바꾼다. lru_cache를 타지 않도록 함수째 바꾼다."""
-    monkeypatch.setattr(auth, "get_settings", lambda: Settings(jwt_public_key_pem=None))
+    monkeypatch.setattr(auth_repository, "get_settings", lambda: Settings(jwt_public_key_pem=None))
 
     def install(read_public_key):
-        monkeypatch.setattr(auth, "_public_key", read_public_key)
+        monkeypatch.setattr(auth_repository, "_public_key", read_public_key)
 
     return install
 
@@ -89,7 +91,7 @@ def test_other_environment_key_is_unauthorized(ssm_mode):
 
 
 def test_missing_bearer_header_rejected():
-    from app import deps
+    from app.auth import deps
 
     with pytest.raises(UnauthorizedError):
         deps.get_current_user_id(SimpleNamespace(headers={}))

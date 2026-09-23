@@ -1,8 +1,5 @@
 import threading
 import time
-from functools import lru_cache
-
-from app.core.config import get_settings
 
 MAX_BUCKETS = 10000
 
@@ -37,14 +34,3 @@ class RateLimiter:
             if tokens + (current - updated) * self.rate < self.capacity
         }
 
-
-@lru_cache
-def chat_limiter() -> RateLimiter:
-    """유저별 메시지 전송 레이트리미터 전역 싱글턴"""
-    return RateLimiter(get_settings().chat_messages_per_minute)
-
-
-@lru_cache
-def routine_limiter() -> RateLimiter:
-    """유저별 루틴 생성 레이트리미터 전역 싱글턴"""
-    return RateLimiter(get_settings().routine_generations_per_minute)
