@@ -6,10 +6,13 @@
 import uuid
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.graph import END, START, StateGraph
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.agent import graph
 from app.clients import mysql
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models   # noqa: F401 — 테이블 등록
@@ -44,3 +47,14 @@ def backend_engine(monkeypatch):
     BackendBase.metadata.create_all(engine)
     monkeypatch.setattr(mysql, "_engine", lambda: engine)
     return engine
+
+
+async def call_tool(name: str, args: dict, user_id: str = "11111111-1111-1111-1111-111111111111") -> ToolMessage:
+    """ToolNode 한 번 실행, 유저 아이디는 상태에서 주입"""
+    builder = StateGraph(graph.ChatState)
+    builder.add_node("tools", graph.tool_node())
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    call = {"name": name, "args": args, "id": "call-1", "type": "tool_call"}
+    state = await builder.compile().ainvoke({"messages": [AIMessage(content="", tool_calls=[call])], "user_id": user_id})
+    return state["messages"][-1]

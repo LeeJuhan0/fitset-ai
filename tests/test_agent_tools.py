@@ -1,4 +1,4 @@
-"""툴 디스패치 견고성 테스트 — 로컬 실측 버그(503) 회귀 방지.
+"""툴 실행 견고성 테스트 — 로컬 실측 버그(503) 회귀 방지.
 
 LLM이 만든 툴 인자는 신뢰할 수 없다: 선택 필드 생략·enum 밖 값이 일상적으로 온다.
 어떤 실패도 예외로 올라가 턴을 죽이면 안 되고(유저에게 503), LLM에 오류 내용을
@@ -6,9 +6,9 @@ LLM이 만든 툴 인자는 신뢰할 수 없다: 선택 필드 생략·enum 밖
 """
 import pytest
 
-from app.agent import tools
-from app.agent.tools import routine
+from app.agent.tools import chart, routine
 from app.routines import service as routines_service
+from tests.conftest import call_tool
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -34,31 +34,45 @@ async def test_missing_optional_field_uses_tool_default(monkeypatch):
     assert "루틴을 만들지 못했습니다" in text
 
 
-async def test_dispatch_returns_validation_error_to_llm():
+async def test_tool_node_returns_validation_error_to_llm():
     # enum 밖 부위 — 예외 대신 교정 지시 텍스트가 LLM에 돌아가야 한다
-    text, artifact = await tools.dispatch(USER_ID, "RecommendRoutine", {
+    message = await call_tool("RecommendRoutine", {
         "level": "intermediate",
         "muscle_groups": ["다리"], "minutes": 50,
     })
-    assert artifact is None
-    assert "인자가 올바르지 않습니다" in text
-    assert "muscle_groups" in text
+    assert message.artifact is None
+    assert "인자가 올바르지 않습니다" in message.content
+    assert "muscle_groups" in message.content
 
 
-async def test_dispatch_survives_unexpected_tool_crash(monkeypatch):
+async def test_tool_node_survives_unexpected_tool_crash(monkeypatch):
     async def boom(user_id, args):
         raise RuntimeError("db exploded")
 
-    monkeypatch.setitem(tools.TOOL_RUNNERS, "DrawChart", boom)
-    text, artifact = await tools.dispatch(USER_ID, "DrawChart", {"metric": "bodyWeight"})
-    assert artifact is None
-    assert "오류가 발생" in text
+    monkeypatch.setattr(chart, "run", boom)
+    message = await call_tool("DrawChart", {"metric": "bodyWeight"})
+    assert message.artifact is None
+    assert "오류가 발생" in message.content
 
 
-async def test_dispatch_unknown_tool_name():
-    text, artifact = await tools.dispatch(USER_ID, "NoSuchTool", {})
-    assert artifact is None
-    assert "없습니다" in text
+async def test_tool_node_unknown_tool_name():
+    message = await call_tool("NoSuchTool", {})
+    assert message.artifact is None
+    assert "NoSuchTool" in message.content
+
+
+async def test_tool_node_injects_user_id_from_state(monkeypatch):
+    seen = {}
+
+    async def fake_run(user_id, args):
+        seen["user_id"] = user_id
+        return "ok", {"response_scheme": "chart", "payload": {}}
+
+    monkeypatch.setattr(chart, "run", fake_run)
+    message = await call_tool("DrawChart", {"metric": "bodyWeight"})
+    assert seen["user_id"] == USER_ID
+    assert message.artifact == {"response_scheme": "chart", "payload": {}}
+    assert "user_id" not in chart.draw_chart.tool_call_schema.model_json_schema()["properties"]
 
 
 def test_suggest_exercises_partial_korean_name():

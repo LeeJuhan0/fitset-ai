@@ -8,10 +8,10 @@ from decimal import Decimal
 
 import pytest
 
-from app.agent import tools
 from app.agent.tools import history
 from app.clients import mysql
 from app.exercises import repository as exercise_catalog
+from tests.conftest import call_tool
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -109,11 +109,9 @@ async def test_unconfigured_env_falls_back_politely(monkeypatch):
     assert "설정되어 있지 않습니다" in text
 
 
-async def test_dispatch_rejects_out_of_range_days(configured):
-    # days 상한(365) 초과 — dispatch가 예외 대신 교정 지시를 LLM에 돌려준다
-    text, artifact = await tools.dispatch(USER_ID, "QueryWorkoutHistory", {
-        "template": "session_summary", "days": 9999,
-    })
-    assert artifact is None
-    assert "인자가 올바르지 않습니다" in text
-    assert "days" in text
+async def test_tool_node_rejects_out_of_range_days(configured):
+    # days 상한(365) 초과 — ToolNode가 예외 대신 교정 지시를 LLM에 돌려준다
+    message = await call_tool("QueryWorkoutHistory", {"template": "session_summary", "days": 9999}, USER_ID)
+    assert message.artifact is None
+    assert "인자가 올바르지 않습니다" in message.content
+    assert "days" in message.content
