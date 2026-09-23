@@ -14,7 +14,6 @@ from app.core.config import get_settings
 from app.core.handlers import register_exception_handlers
 from app.core.logging import configure_logging, trace_id_var
 from app.exercises import router as exercises_router
-from app.exercises.repository import get_exercise_catalog, get_exercise_meta
 from app.routines import router as routines_router
 from app.clients import postgres
 
@@ -24,24 +23,13 @@ logger = logging.getLogger("fitset")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """부팅 시 executor 교체 테이블 바인딩 종목 데이터 선로딩"""
+    """부팅 시 executor 교체 테이블 바인딩"""
     executor = ThreadPoolExecutor(
         max_workers=get_settings().executor_max_workers, thread_name_prefix="blocking-io"
     )
     asyncio.get_running_loop().set_default_executor(executor)
     dynamo.bind_tables()
-
-    async def preload() -> None:
-        """종목 마스터와 카탈로그 백그라운드 선로딩"""
-        try:
-            await asyncio.to_thread(get_exercise_meta)
-            await asyncio.to_thread(get_exercise_catalog)
-        except Exception:
-            logger.exception("preload failed")
-
-    load_task = asyncio.create_task(preload())
     yield
-    load_task.cancel()
     postgres.close()
     executor.shutdown(wait=False, cancel_futures=True)
 
