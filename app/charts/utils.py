@@ -2,22 +2,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from app.charts.enums import ChartType
-from app.routines.utils import epley_e1rm
+from app.routines.utils import MUSCLE_LABELS_KO, epley_e1rm
 
-MUSCLE_LABELS_KO = {
-    "back": "등",
-    "biceps": "이두근",
-    "calves": "종아리",
-    "chest": "가슴",
-    "core": "코어",
-    "forearms": "전완근",
-    "glutes": "둔근",
-    "hamstrings": "햄스트링",
-    "quadriceps": "대퇴사두근",
-    "shoulders": "어깨",
-    "trapezius": "승모근",
-    "triceps": "삼두근",
-}
 WEEKDAY_LABELS_KO = ("월", "화", "수", "목", "금", "토", "일")
 
 MIN_LINE_POINTS = 2

@@ -1,11 +1,25 @@
-import json
-import re
-
 from app.routines.enums import Goal, Level, MuscleGroup
 
 MUSCLES = frozenset(MuscleGroup)
 
 LEVEL_ORDER = {Level.BEGINNER: 0, Level.INTERMEDIATE: 1, Level.ADVANCED: 2}
+
+MUSCLE_LABELS_KO = {
+    MuscleGroup.BACK: "등",
+    MuscleGroup.BICEPS: "이두근",
+    MuscleGroup.CALVES: "종아리",
+    MuscleGroup.CHEST: "가슴",
+    MuscleGroup.CORE: "코어",
+    MuscleGroup.FOREARMS: "전완근",
+    MuscleGroup.GLUTES: "둔근",
+    MuscleGroup.HAMSTRINGS: "햄스트링",
+    MuscleGroup.QUADRICEPS: "대퇴사두근",
+    MuscleGroup.SHOULDERS: "어깨",
+    MuscleGroup.TRAPEZIUS: "승모근",
+    MuscleGroup.TRICEPS: "삼두근",
+}
+LEVEL_LABELS_KO = {Level.BEGINNER: "초급", Level.INTERMEDIATE: "중급", Level.ADVANCED: "고급"}
+GOAL_LABELS_KO = {Goal.HYPERTROPHY: "근비대", Goal.WEIGHT_LOSS: "체중감량", Goal.STRENGTH: "근력향상", Goal.ENDURANCE: "체력유지"}
 
 DEFAULT_GOAL = Goal.HYPERTROPHY
 LEVEL_FACTOR = {Level.BEGINNER: 1.0, Level.INTERMEDIATE: 1.3, Level.ADVANCED: 1.6}
@@ -109,23 +123,6 @@ def transfer_keys(meta: dict) -> list[tuple[str, str, str]]:
 def effective_avoided(avoided: list[str] | None, requested: list[str]) -> set[str]:
     """요청 부위와 겹치는 항목 제외한 실효 기피 부위 계산"""
     return set(avoided or []) - set(requested)
-
-
-def parse_query_analysis(raw: str) -> tuple[str | None, set[str], list[str]]:
-    """쿼리 분석 LLM 응답 JSON 을 묘사문 기피 제약으로 파싱"""
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match is None:
-        return None, set(), []
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
-        return None, set(), []
-    description = data.get("description")
-    if not isinstance(description, str) or not description.strip():
-        return None, set(), []
-    avoid = {m for m in data.get("avoidMuscles") or [] if m in MUSCLES}
-    unsafe = [c for c in data.get("unsafeConstraints") or [] if isinstance(c, str) and c.strip()]
-    return description.strip(), avoid, unsafe
 
 
 def _exercise_slug(exercise: dict) -> str | None:
