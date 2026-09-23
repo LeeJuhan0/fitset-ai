@@ -107,3 +107,16 @@ def test_system_message_puts_cache_point_between_static_and_context():
     assert blocks[1] == graph.CACHE_POINT
     assert blocks[2]["text"] == "<user_summary>요약</user_summary>"
     assert len(graph._system_message(None).content) == 2
+
+
+async def test_run_turn_stream_strips_markdown_from_deltas_and_result(monkeypatch):
+    final_state = {"messages": [AIMessage(content="**가슴** 루틴이에요")]}
+    events = [
+        ("messages", (AIMessageChunk(content="**가"), {"langgraph_node": "agent"})),
+        ("messages", (AIMessageChunk(content="슴** 루틴이에요"), {"langgraph_node": "agent"})),
+        ("values", final_state),
+    ]
+    monkeypatch.setattr(graph, "_graph", lambda: FakeGraph(events))
+    collected = [event async for event in graph.run_turn_stream("u-1", None, [HumanMessage(content="q")])]
+    assert "".join(text for kind, text in collected if kind == "delta") == "가슴 루틴이에요"
+    assert collected[-1][1].content == "가슴 루틴이에요"

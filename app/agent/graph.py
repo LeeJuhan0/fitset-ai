@@ -13,6 +13,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from app.agent import guardrails, prompts, tools
+from app.agent.markdown import MarkdownStreamFilter, strip_markdown
 from app.clients import bedrock
 from app.core.config import get_settings
 
@@ -164,6 +165,7 @@ def _finalize(state: dict) -> AgentResult:
             content = _text_of(message)
             break
 
+    content = strip_markdown(content).strip()
     artifact = _last_artifact(state.get("messages", []))
     scheme, payload = guardrails.enforce_scheme_contract(
         artifact.get("response_scheme"), artifact.get("payload")
@@ -185,6 +187,7 @@ async def run_turn_stream(user_id: str, context: str | None, history: list[AnyMe
     """대화 한 턴 스트리밍 실행 본문 조각과 최종 결과 방출"""
     inputs = _initial_state(user_id, context, history)
     final_state: dict = {}
+    markdown = MarkdownStreamFilter()
     async for mode, data in _graph().astream(inputs, stream_mode=["messages", "values"]):
         if mode == "values":
             final_state = data
@@ -192,8 +195,11 @@ async def run_turn_stream(user_id: str, context: str | None, history: list[AnyMe
         chunk, metadata = data
         if metadata.get("langgraph_node") != AGENT_NODE:
             continue
-        text = _chunk_text(chunk)
+        text = markdown.feed(_chunk_text(chunk))
         if text:
             yield GraphEvent.DELTA, text
+    tail = markdown.flush()
+    if tail:
+        yield GraphEvent.DELTA, tail
     _log_usage(final_state)
     yield GraphEvent.RESULT, _finalize(final_state)
