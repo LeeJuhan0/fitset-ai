@@ -12,13 +12,14 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.agent import guardrails, tools
+from app.agent import guardrails, prompts, tools
 from app.clients import bedrock
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
 
 AGENT_NODE = "agent"
+CACHE_POINT = {"cachePoint": {"type": "default"}}
 TOOLS_NODE = "tools"
 
 
@@ -117,12 +118,34 @@ def _text_of(message: AnyMessage) -> str:
     return "".join(parts).strip()
 
 
-def _initial_state(user_id: str, system_prompt: str, history: list[AnyMessage]) -> dict:
-    """시스템 프롬프트와 대화 이력으로 그래프 입력 상태 조립"""
+def _system_message(context: str | None) -> SystemMessage:
+    """고정 프롬프트 뒤 캐시 지점, 그 뒤 유저별 요약"""
+    blocks = [{"type": "text", "text": prompts.CHAT_SYSTEM.strip()}, CACHE_POINT]
+    if context:
+        blocks.append({"type": "text", "text": context})
+    return SystemMessage(content=blocks)
+
+
+def _initial_state(user_id: str, context: str | None, history: list[AnyMessage]) -> dict:
+    """시스템 메시지와 대화 이력으로 그래프 입력 상태 조립"""
     return {
-        "messages": [SystemMessage(content=system_prompt), *history],
+        "messages": [_system_message(context), *history],
         "user_id": user_id,
     }
+
+
+def _log_usage(state: dict) -> None:
+    """이번 턴 모델 호출 토큰, 캐시 적중량 로그"""
+    for message in state.get("messages", []):
+        usage = getattr(message, "usage_metadata", None)
+        if message.type != "ai" or not usage:
+            continue
+        details = usage.get("input_token_details") or {}
+        logger.info(
+            "llm usage input=%s output=%s cache_read=%s cache_write=%s",
+            usage.get("input_tokens"), usage.get("output_tokens"),
+            details.get("cache_read"), details.get("cache_creation"),
+        )
 
 
 def _last_artifact(messages: list[AnyMessage]) -> dict:
@@ -151,15 +174,16 @@ def _finalize(state: dict) -> AgentResult:
     return AgentResult(content, scheme, payload)
 
 
-async def run_turn(user_id: str, system_prompt: str, history: list[AnyMessage]) -> AgentResult:
+async def run_turn(user_id: str, context: str | None, history: list[AnyMessage]) -> AgentResult:
     """대화 한 턴 동기 실행 후 결과 반환"""
-    state = await _graph().ainvoke(_initial_state(user_id, system_prompt, history))
+    state = await _graph().ainvoke(_initial_state(user_id, context, history))
+    _log_usage(state)
     return _finalize(state)
 
 
-async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMessage]):
+async def run_turn_stream(user_id: str, context: str | None, history: list[AnyMessage]):
     """대화 한 턴 스트리밍 실행 본문 조각과 최종 결과 방출"""
-    inputs = _initial_state(user_id, system_prompt, history)
+    inputs = _initial_state(user_id, context, history)
     final_state: dict = {}
     async for mode, data in _graph().astream(inputs, stream_mode=["messages", "values"]):
         if mode == "values":
@@ -171,4 +195,5 @@ async def run_turn_stream(user_id: str, system_prompt: str, history: list[AnyMes
         text = _chunk_text(chunk)
         if text:
             yield GraphEvent.DELTA, text
+    _log_usage(final_state)
     yield GraphEvent.RESULT, _finalize(final_state)

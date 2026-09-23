@@ -99,3 +99,11 @@ async def test_run_turn_and_stream_agree_on_finalize(monkeypatch):
     assert (sync_result.content, sync_result.response_scheme) == (
         stream_result.content, stream_result.response_scheme
     ) == ("같은 답", "text")
+
+
+def test_system_message_puts_cache_point_between_static_and_context():
+    blocks = graph._system_message("<user_summary>요약</user_summary>").content
+    assert blocks[0]["text"].startswith("당신은 운동 앱 FitSet의 AI 코치입니다")
+    assert blocks[1] == graph.CACHE_POINT
+    assert blocks[2]["text"] == "<user_summary>요약</user_summary>"
+    assert len(graph._system_message(None).content) == 2
