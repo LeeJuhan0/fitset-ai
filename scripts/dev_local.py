@@ -309,7 +309,7 @@ def _install_fake_routine_store():
         ]
         return rows[:limit]
 
-    rag_retrieve.search = fake_search
+    rag_retrieve.fetch = fake_search
 
 
 # ── LLM 대체 (선택) ───────────────────────────────────────────────────

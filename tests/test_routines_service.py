@@ -51,7 +51,7 @@ def wired(monkeypatch):
         calls["search"].append(filters)
         return calls["rows"](filters)
 
-    monkeypatch.setattr(retrieve, "search", search)
+    monkeypatch.setattr(retrieve, "fetch", search)
     return calls
 
 

@@ -1,4 +1,4 @@
-"""routines/retrieve.search 유닛 테스트 — 룰 필터 5개의 SQL 표현.
+"""rag/retrieve.fetch 유닛 테스트 — 룰 필터 5개의 SQL 표현.
 
 domain.passes_filters 가 하던 판정이 WHERE 절로 옮겨가므로, 절이 하나라도 빠지면
 필터가 조용히 풀린다. 실제 판정은 CI 의 pgvector 통합 테스트(5단계)가 맡는다.
@@ -55,5 +55,5 @@ def test_search_passes_statement_to_client(monkeypatch):
         return []
 
     monkeypatch.setattr(retrieve.postgres, "fetch_all", fake_fetch_all)
-    retrieve.search(_filters(), [0.1] * 4, limit=30)
+    retrieve.fetch(_filters(), [0.1] * 4, limit=30)
     assert "routines" in str(captured["stmt"])

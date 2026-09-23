@@ -50,7 +50,7 @@ def search_statement(filters: SearchFilters, query_vector, limit: int):
     return stmt
 
 
-def search(filters: SearchFilters, query_vector, limit: int) -> list[dict]:
+def fetch(filters: SearchFilters, query_vector, limit: int) -> list[dict]:
     """룰 필터 통과 루틴 코사인 유사도 상위 조회"""
     rows = postgres.fetch_all(search_statement(filters, query_vector, limit))
     return [
@@ -63,8 +63,8 @@ async def top_candidates(filters: SearchFilters, parsed_avoided: set[str], query
     """코사인 상위 후보, 문맥 기피로 비면 그것만 풀어 재검색"""
     limit = get_settings().cosine_top_k
     strict = replace(filters, avoided=filters.avoided | parsed_avoided)
-    top = await asyncio.to_thread(search, strict, query_vector, limit)
+    top = await asyncio.to_thread(fetch, strict, query_vector, limit)
     if top or not parsed_avoided:
         return top
     logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed_avoided))
-    return await asyncio.to_thread(search, filters, query_vector, limit)
+    return await asyncio.to_thread(fetch, filters, query_vector, limit)

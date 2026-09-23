@@ -92,7 +92,7 @@ def client(monkeypatch, seeded):
 
 
 def _slugs(filters):
-    return [row["slug"] for row in retrieve.search(filters, QUERY, 30)]
+    return [row["slug"] for row in retrieve.fetch(filters, QUERY, 30)]
 
 
 def _filters(**overrides):
