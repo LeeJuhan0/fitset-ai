@@ -5,7 +5,7 @@
 > 2026-08-25 백엔드 리팩토링(#92·#93·#95·#96·#98·#99) 공유본(fitset_app_01_04)으로 본문 교체 완료, AI 서버 엔티티도 반영 완료. 요지: 단위 접미사 제거(height_cm→height 등), body_weight_log→body_weight_history·routine\*→workout_template\*·workout\*→workout_history\* 개명, active_duration_seconds→pause_seconds(순수 운동 시간은 경과-일시정지로 유도), slug 컬럼 삭제(thumbnail_key 자연키 대체 — AI 서버는 키 파일명에서 slug를 계산 컬럼으로 유도).
 
 백엔드 스프링 서버가 보유한 MySQL ERD (2026-08-25 백엔드 공유본 — 구현 스키마 `schema.sql` + JPA 엔티티 기준).
-**AI 서버는 이 DB를 직접 조회한다** (2026-08-12 내부 API 파기 합의) — 읽기 전용 계정 `fitset_readonly`, 코드 사본은 각 도메인 패키지 `domain.py`(SQLAlchemy 엔티티, 공유 베이스 core/orm). 구 [내부 API 명세](백엔드%20내부%20API%20명세.md)는 폐기.
+**AI 서버는 이 DB를 직접 조회한다** (2026-08-12 내부 API 파기 합의) — 읽기 전용 계정 `fitset_readonly`, 코드 사본은 각 도메인 패키지 `models.py`(SQLAlchemy 엔티티, 공유 베이스 core/orm). 구 [내부 API 명세](백엔드%20내부%20API%20명세.md)는 폐기.
 이 문서는 직조회 계약·데이터 정합성 검토를 위한 **참조용 사본**이며, 정본은 백엔드 리포.
 
 - DB: MySQL, PK는 전 테이블 `id` `BINARY(16)` UUID (Hibernate `@UuidGenerator` TIME)

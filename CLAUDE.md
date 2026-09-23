@@ -61,13 +61,13 @@
 
 - 계정 `fitset_readonly`(SELECT만) + 세션 READ ONLY. 비밀번호는 SSM `/fitset/prod/ai/mysql-password`, 접속은 `MYSQL_*` 환경변수(host 미설정 시 기능 비활성). RDS는 Aurora가 아니라 커뮤니티 MySQL
 - SG: hangang-rds-sg에 AI 태스크 SG(sg-092d73bf4638dcead) 3306 인바운드 허용됨
-- 코드: `clients/mysql.py`(SQLAlchemy 엔진, 커넥션 풀, 경계 표기 변환) + 각 도메인 패키지 domain.py의 SQLAlchemy 엔티티(users·workouts·exercises, 공유 베이스는 core/orm). 스키마 정본은 `docs/백엔드 ERD.md`
+- 코드: `clients/mysql.py`(SQLAlchemy 엔진, 커넥션 풀, 경계 표기 변환) + 각 도메인 패키지 models.py의 SQLAlchemy 엔티티(users·workouts·exercises, 공유 베이스는 core/orm). 스키마 정본은 `docs/백엔드 ERD.md`
 - **이관 완료 (2026-08-12)**: 챗봇 기록 툴(QueryWorkoutHistory, NL2SQL — 이슈 #36) + routines(프로필·운동기록) + charts(체중·세트·세션) + 종목 상세 전부 직조회. `clients/spring.py` 삭제됨. 구 내부 API의 응답 형태와 책임(0→null 변환, enum camelCase 변환)은 users·workouts·exercises repository가 승계
 
 ## 현재 구현 범위 (2026-07-25)
 
 **대상**: 클라이언트 API §1 AI 루틴 생성(`POST /ai/v1/routines`) + 유저 데이터 조회(프로필·운동기록·종목 — 조회 경로는 위 「유저 데이터 조회」 섹션).
-**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(PynamoDB ODM — 모델은 각 domain.py, boto3 직접 호출 금지).
+**스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(PynamoDB ODM — 모델은 각 models.py, boto3 직접 호출 금지).
 **LLM: Amazon Nova 2 Lite(`global.amazon.nova-2-lite-v1:0`, $0.30/$2.50)** — 2026-07-29 비용 절감 확정(Haiku 4.5 대비 입력 1/3.3·출력 1/2). **반드시 global 프로필** — 1세대 Nova는 apac 프로필 강제인데 조직 SCP가 APAC 리전을 차단해 사용 불가(실측), global 라우팅만 SCP를 통과한다. 품질 문제 시 `LLM_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0`으로 즉시 롤백. 챗봇·루틴·제목·요약이 모델 하나를 공유한다(Converse API라 모델 무관 구조).
 **임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 `scripts/embed_routines.py --force` 전량 재계산 필수(임베딩 공간 호환 안 됨).
 호출 주체는 앱 클라이언트. 네트워크 인프라는 Terraform으로 별도 진행(범위 밖).
