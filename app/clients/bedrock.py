@@ -4,6 +4,7 @@ from functools import lru_cache
 
 import boto3
 from botocore.client import BaseClient
+from botocore.exceptions import BotoCoreError, ClientError
 from botocore.config import Config
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -12,6 +13,8 @@ from pydantic import BaseModel
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
+
+LLM_ERRORS = (BotoCoreError, ClientError, KeyError, IndexError, ValueError)
 
 INFERENCE_PROFILE_PREFIXES = ("us", "eu", "apac", "global")
 
@@ -79,10 +82,13 @@ def structured(schema: type[BaseModel], system: str, user: str) -> BaseModel | N
 def try_structured(purpose: str, schema: type[BaseModel], system: str, user: str) -> BaseModel | None:
     """구조화 출력 실패 시 로그 기록 후 None 반환"""
     try:
-        return structured(schema, system, user)
-    except Exception:
+        result = structured(schema, system, user)
+    except LLM_ERRORS:
         logger.warning("%s LLM failed, falling back", purpose, exc_info=True)
         return None
+    if result is None:
+        logger.warning("%s LLM returned no structured output, falling back", purpose)
+    return result
 
 
 def complete(system: str, user: str, max_tokens: int | None = None) -> str:
@@ -101,7 +107,7 @@ def try_complete(purpose: str, system: str, user: str, max_tokens: int | None = 
     """LLM 호출 실패 시 로그 기록 후 None 반환"""
     try:
         return complete(system, user, max_tokens)
-    except Exception:
+    except LLM_ERRORS:
         logger.warning("%s LLM failed, falling back", purpose, exc_info=True)
         return None
 
@@ -123,6 +129,6 @@ def try_embed_query(text: str) -> list[float] | None:
     """쿼리 임베딩 실패 시 로그 기록 후 None 반환"""
     try:
         return embed_query(text)
-    except Exception:
+    except LLM_ERRORS:
         logger.exception("query embedding failed")
         return None

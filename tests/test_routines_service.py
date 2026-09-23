@@ -3,6 +3,7 @@
 리포지토리·LLM·백엔드 조회를 전부 목으로 두고, 기피 재시도·LLM 폴백·후보 없음 세 갈래만 본다.
 """
 import pytest
+from botocore.exceptions import ClientError
 
 from app.core.exceptions import AiUnavailableError
 from app.routines.exceptions import NoRoutineCandidateError
@@ -10,6 +11,12 @@ from app.clients import bedrock
 from app.rag import prompts, query, retrieve
 from app.routines import service
 from app.routines.schemas import RoutineGenerateRequest
+
+
+def _bedrock_down() -> ClientError:
+    """Bedrock 장애와 같은 형태의 예외"""
+    return ClientError({"Error": {"Code": "ServiceUnavailableException", "Message": "down"}}, "Converse")
+
 
 USER = "11111111-1111-1111-1111-111111111111"
 
@@ -73,7 +80,7 @@ async def test_no_candidate_after_retry_raises_409(wired):
 @pytest.mark.asyncio
 async def test_llm_failure_falls_back_to_cosine_top1(wired, monkeypatch):
     wired["rows"] = lambda f: [_row("first"), _row("second")]
-    monkeypatch.setattr(bedrock, "structured", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(bedrock, "structured", lambda *a: (_ for _ in ()).throw(_bedrock_down()))
     assert await service.generate_routine(USER, _request()) == "first"
 
 
@@ -113,7 +120,15 @@ async def test_analyze_query_filters_unknown_muscles(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_analyze_query_falls_back_to_template_on_failure(monkeypatch):
-    monkeypatch.setattr(bedrock, "structured", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(bedrock, "structured", lambda *a: (_ for _ in ()).throw(_bedrock_down()))
     description, avoided, unsafe = await _analyze(_request())
     assert description == "가슴 중심의 중급 근비대 운동 루틴, 약 60분."
     assert (avoided, unsafe) == (set(), [])
+
+
+@pytest.mark.asyncio
+async def test_code_bug_in_llm_call_is_not_swallowed_as_fallback(monkeypatch):
+    # 코드 버그(TypeError)는 LLM 장애처럼 폴백으로 숨기지 않고 드러낸다
+    monkeypatch.setattr(bedrock, "structured", lambda *a: (_ for _ in ()).throw(TypeError("bug")))
+    with pytest.raises(TypeError):
+        await _analyze(_request())
