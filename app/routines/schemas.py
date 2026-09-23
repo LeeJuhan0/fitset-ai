@@ -1,19 +1,12 @@
-from typing import Literal
-
 from pydantic import Field
 
 from app.core.schemas import CamelModel
-
-Level = Literal["beginner", "intermediate", "advanced"]
-Muscle = Literal[
-    "back", "biceps", "calves", "chest", "core", "forearms",
-    "glutes", "hamstrings", "quadriceps", "shoulders", "trapezius", "triceps",
-]
+from app.routines.enums import Level, MuscleGroup
 
 
 class RoutineGenerateRequest(CamelModel):
     level: Level
-    muscle_groups: list[Muscle] = Field(min_length=1, max_length=12)
+    muscle_groups: list[MuscleGroup] = Field(min_length=1, max_length=12)
     minutes: int = Field(ge=10, le=180)
     context: str | None = Field(default=None, max_length=200)
     include_warmup: bool

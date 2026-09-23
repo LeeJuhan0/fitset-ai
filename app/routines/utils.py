@@ -1,37 +1,15 @@
 import json
 import re
 
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, SmallInteger, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from app.routines.enums import Goal, Level, MuscleGroup
 
-from app.core.orm import SearchBase
+MUSCLES = frozenset(MuscleGroup)
 
-MUSCLES = frozenset({
-    "back", "biceps", "calves", "chest", "core", "forearms",
-    "glutes", "hamstrings", "quadriceps", "shoulders", "trapezius", "triceps",
-})
+LEVEL_ORDER = {Level.BEGINNER: 0, Level.INTERMEDIATE: 1, Level.ADVANCED: 2}
 
-LEVEL_ORDER = {"beginner": 0, "intermediate": 1, "advanced": 2}
-
-
-class Routine(SearchBase):
-    __tablename__ = "routines"
-
-    slug: Mapped[str] = mapped_column(Text, primary_key=True)
-    goal: Mapped[str | None] = mapped_column(Text)
-    level: Mapped[int] = mapped_column(SmallInteger)
-    minutes: Mapped[int | None] = mapped_column(SmallInteger)
-    muscle_groups: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    bodyweight_only: Mapped[bool] = mapped_column(Boolean)
-    exercise_names: Mapped[list[str]] = mapped_column(ARRAY(Text))
-    body: Mapped[dict] = mapped_column(JSONB)
-    embedding = mapped_column(Vector(1024))
-
-DEFAULT_GOAL = "hypertrophy"
-LEVEL_FACTOR = {"beginner": 1.0, "intermediate": 1.3, "advanced": 1.6}
-GOAL_FACTOR = {"strength": 1.1, "hypertrophy": 1.0, "weightLoss": 0.9, "endurance": 0.9}
+DEFAULT_GOAL = Goal.HYPERTROPHY
+LEVEL_FACTOR = {Level.BEGINNER: 1.0, Level.INTERMEDIATE: 1.3, Level.ADVANCED: 1.6}
+GOAL_FACTOR = {Goal.STRENGTH: 1.1, Goal.HYPERTROPHY: 1.0, Goal.WEIGHT_LOSS: 0.9, Goal.ENDURANCE: 0.9}
 
 PATTERN_RATIO = {
     "squat": (0.70, 0.55),
@@ -93,7 +71,7 @@ DURATION_BASE_SECONDS = {
     "abdominals-stretch-variation-three": 20,
     "abdominals-stretch-variation-four": 20,
 }
-DURATION_LEVEL_FACTOR = {"beginner": 0.7, "intermediate": 1.0, "advanced": 1.3}
+DURATION_LEVEL_FACTOR = {Level.BEGINNER: 0.7, Level.INTERMEDIATE: 1.0, Level.ADVANCED: 1.3}
 DURATION_STEP_SECONDS = 5
 
 

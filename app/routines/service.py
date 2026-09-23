@@ -8,7 +8,7 @@ from app.core import llm, ratelimit
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, RateLimitedError
 from app.exercises import repository as exercise_catalog
-from app.routines import domain, prompts, repository
+from app.routines import prompts, repository, utils
 from app.routines.exceptions import NoRoutineCandidateError, UnsafeConstraintError
 from app.routines.schemas import (
     RoutineExerciseOut,
@@ -31,7 +31,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         raise AiUnavailableError("루틴 검색 저장소가 설정되지 않았습니다.")
 
     profile = await asyncio.to_thread(users_repository.get_profile, user_id)
-    goal = profile.get("goal") or domain.DEFAULT_GOAL
+    goal = profile.get("goal") or utils.DEFAULT_GOAL
     workouts, analysis = await asyncio.gather(
         asyncio.to_thread(workouts_repository.get_recent_workouts, user_id, settings.workout_days),
         _analyze_query(request, goal),
@@ -43,12 +43,12 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         raise UnsafeConstraintError()
 
     meta = exercise_catalog.get_exercise_meta()
-    stats = domain.build_e1rm_stats(workouts, meta)
-    ratio = domain.bodyweight_ratio(workouts, meta)
+    stats = utils.build_e1rm_stats(workouts, meta)
+    ratio = utils.bodyweight_ratio(workouts, meta)
     home_only = ratio is not None and ratio >= settings.bodyweight_home_ratio
 
-    avoided = domain.effective_avoided(profile.get("avoidBodyParts"), request.muscle_groups)
-    parsed = domain.effective_avoided(sorted(parsed_avoided), request.muscle_groups)
+    avoided = utils.effective_avoided(profile.get("avoidBodyParts"), request.muscle_groups)
+    parsed = utils.effective_avoided(sorted(parsed_avoided), request.muscle_groups)
     if parsed:
         logger.info("context-parsed avoid applied: %s", sorted(parsed))
 
@@ -88,7 +88,7 @@ async def _analyze_query(request: RoutineGenerateRequest, goal: str) -> tuple[st
     raw = await asyncio.to_thread(llm.try_complete, "describe", system, user, 300)
     if raw is None:
         return fallback, set(), []
-    description, avoided, unsafe = domain.parse_query_analysis(raw)
+    description, avoided, unsafe = utils.parse_query_analysis(raw)
     if description is None:
         logger.warning("describe LLM returned unparsable output (%r), falling back to template", raw[:200])
         return fallback, set(), []
@@ -130,14 +130,14 @@ def _build_set(
             order_index=order_index,
             weight=0,
             reps=0,
-            duration_seconds=domain.set_duration_seconds(
+            duration_seconds=utils.set_duration_seconds(
                 slug, level, get_settings().duration_set_seconds
             ),
         )
     if kind == "REPS_ONLY":
         return RoutineSetOut(order_index=order_index, weight=0, reps=reps, duration_seconds=0)
 
-    weight = domain.recommend_weight(slug, reps, stats, profile, meta) or 0
+    weight = utils.recommend_weight(slug, reps, stats, profile, meta) or 0
     return RoutineSetOut(order_index=order_index, weight=weight, reps=reps, duration_seconds=0)
 
 
@@ -165,7 +165,7 @@ def _build_response(
                     1, int(sets[0].duration_seconds * settings.warmup_duration_factor)
                 )
             else:
-                sets[0].weight = domain.warmup_weight(slug, sets[0].weight, equipment) or 0
+                sets[0].weight = utils.warmup_weight(slug, sets[0].weight, equipment) or 0
         exercises.append(
             RoutineExerciseOut(
                 exercise_id=exercise_catalog.exercise_id(slug),

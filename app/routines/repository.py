@@ -4,7 +4,8 @@ import numpy as np
 from sqlalchemy import or_, select
 
 from app.clients import postgres
-from app.routines.domain import LEVEL_ORDER, Routine
+from app.routines.models import Routine
+from app.routines.utils import LEVEL_ORDER
 
 LEVEL_NAME = {order: name for name, order in LEVEL_ORDER.items()}
 

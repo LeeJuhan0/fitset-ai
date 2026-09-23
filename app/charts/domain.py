@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from app.routines.domain import epley_e1rm
+from app.routines.utils import epley_e1rm
 
 MUSCLE_LABELS_KO = {
     "back": "등",

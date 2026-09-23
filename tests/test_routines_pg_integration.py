@@ -16,7 +16,7 @@ from sqlalchemy.engine import make_url
 from app.clients import postgres
 from app.core.exceptions import DomainError
 from app.routines import repository
-from app.routines.domain import Routine
+from app.routines.models import Routine
 
 DSN = os.environ.get("PG_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="PG_TEST_DSN 미설정")
