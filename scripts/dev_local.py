@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse
 
 from app import deps
 from app.chat import repository
-from app.chat.domain import ThreadRecord
+from app.chat.models import ThreadRecord
 from app.exercises import repository as exercise_repository
 from app.users import repository as users_repository
 from app.workouts import repository as workouts_repository

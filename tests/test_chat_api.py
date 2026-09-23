@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from app import deps
 from app.agent import graph
 from app.chat import repository, service
-from app.chat.domain import MessageRecord, ThreadRecord
+from app.chat.models import MessageRecord, ThreadRecord
 from app.core import llm, ratelimit
 from app.main import app
 

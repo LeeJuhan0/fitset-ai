@@ -10,8 +10,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from app.chat import domain, repository
-from app.chat.domain import MessageRecord, ThreadRecord, UserSummaryRecord
+from app.chat import repository, utils
+from app.chat.models import MessageRecord, ThreadRecord, UserSummaryRecord
 from app.core import dynamo
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -226,7 +226,7 @@ def test_reads_legacy_items_written_with_null_attributes(tables):
     })
     items, _ = repository.messages_page("01THREAD", limit=10)
     assert items[0].payload is None and items[0].response_scheme is None
-    view = domain.to_message_view(items[1])
+    view = utils.to_message_view(items[1])
     assert view["payload"] == {"metric": "bodyWeight", "y": [70.5, 71], "unit": None}
 
 
@@ -239,9 +239,9 @@ def test_payload_round_trips_floats_and_nested_nulls(tables):
     message.payload = payload
     repository.put_message(message)
     items, _ = repository.messages_page("01THREAD", limit=1)
-    assert domain.to_message_view(items[0])["payload"] == payload
+    assert utils.to_message_view(items[0])["payload"] == payload
     # 저장 전 레코드(done 이벤트 경로)도 같은 dict로 풀려야 한다
-    assert domain.to_message_view(message)["payload"] == payload
+    assert utils.to_message_view(message)["payload"] == payload
 
 
 def test_bind_tables_applies_environment_table_names(monkeypatch):
