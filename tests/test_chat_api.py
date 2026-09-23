@@ -105,8 +105,8 @@ class FakeStore:
     def get_user_summary(self, user_id):
         return self.user_summaries.get(user_id)
 
-    def save_user_summary(self, user_id, summary_text, updated_at):
-        self.user_summaries[user_id] = summary_text
+    def put_user_summary(self, record):
+        self.user_summaries[record.user_id] = record.summary_text
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ def store(monkeypatch):
     for name in (
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
         "save_summary", "messages_page", "recent_messages", "put_message",
-        "delete_messages", "get_user_summary", "save_user_summary",
+        "delete_messages", "get_user_summary", "put_user_summary",
         "count_messages", "messages_after",
     ):
         monkeypatch.setattr(repository, name, getattr(fake, name))

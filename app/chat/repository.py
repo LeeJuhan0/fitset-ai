@@ -149,19 +149,14 @@ def delete_messages(thread_id: str) -> None:
 
 
 def get_user_summary(user_id: str) -> str | None:
-    """유저 장기 요약 텍스트 단건 조회"""
-    try:
-        return UserSummaryRecord.get(user_id).summary_text
-    except UserSummaryRecord.DoesNotExist:
+    """유저 최신 장기 요약 텍스트 역순 Query 1건"""
+    latest = UserSummaryRecord.query(user_id, scan_index_forward=False, limit=1)
+    record = next(iter(latest), None)
+    if record is None:
         return None
+    return record.summary_text
 
 
-def save_user_summary(user_id: str, summary_text: str, updated_at: str) -> None:
-    """유저 장기 요약 upsert 생성 시각은 최초 1회"""
-    UserSummaryRecord(user_id).update(
-        actions=[
-            UserSummaryRecord.summary_text.set(summary_text),
-            UserSummaryRecord.updated_at.set(updated_at),
-            UserSummaryRecord.created_at.set(UserSummaryRecord.created_at | updated_at),
-        ]
-    )
+def put_user_summary(record: UserSummaryRecord) -> None:
+    """유저 장기 요약 이력 새 아이템 저장"""
+    record.save()

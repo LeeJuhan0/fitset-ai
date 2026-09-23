@@ -227,7 +227,10 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     if merged is None:
         return None
     await asyncio.to_thread(
-        repository.save_user_summary, user_id, merged.strip(), clock.iso_utc(clock.now_utc())
+        repository.put_user_summary,
+        domain.UserSummaryRecord.new(
+            user_id, merged.strip(), clock.now_utc(), thread_id, fresh[-1].message_id
+        ),
     )
     return None
 
