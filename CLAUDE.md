@@ -78,7 +78,7 @@
 2. **유저 컨텍스트**: 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
 3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
 4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
-5. **후보 생성**: Postgres(pgvector) `routines`에 **룰 필터 5개를 WHERE 절로**(`routines/repository.search_statement`, 2026-08-28 전환). 응답 조립에 쓰는 세트 상세는 같은 행의 `body` JSONB라 추가 조회가 없다. 룰 필터 확정 규칙 (2026-07-25):
+5. **후보 생성**: Postgres(pgvector) `routines`에 **룰 필터 5개를 WHERE 절로**(`rag/retrieve.search_statement`, 2026-08-28 전환, 파이프라인은 `app/rag/`). 응답 조립에 쓰는 세트 상세는 같은 행의 `body` JSONB라 추가 조회가 없다. 룰 필터 확정 규칙 (2026-07-25):
    - **부위(muscleGroups)**: 요청 부위와 루틴 `muscle_groups`의 **교집합이 있으면 통과** (`∩ ≠ ∅`)
    - **기피 부위(avoidBodyParts)**: 프로필 조회값 — 단 **요청 muscleGroups와 겹치는 부위는 클라 요청 우선**(기피에서 제외). 실효 기피 = `avoidBodyParts − muscleGroups`, 루틴 `muscle_groups`에 실효 기피 부위가 하나라도 포함되면 제외 (`null`/빈 배열이면 미적용)
    - **장비**: 최근 기록에서 **맨몸(bodyweight) 종목 비율 ≥ 70%면 홈트 유저로 판정 → `equipment ⊆ {bodyweight}` 루틴만** 후보. 그 미만(기록 없음 포함)은 **머신 보유 가정 → 장비 필터 없음**
