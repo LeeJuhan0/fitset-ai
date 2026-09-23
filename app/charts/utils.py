@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+from app.charts.enums import ChartType
 from app.routines.utils import epley_e1rm
 
 MUSCLE_LABELS_KO = {
@@ -47,7 +48,7 @@ def _week_start(moment: datetime) -> datetime:
 
 def _payload(
     metric: str,
-    chart_type: str,
+    chart_type: ChartType,
     title: str,
     x_label: str,
     y_label: str,
@@ -108,7 +109,7 @@ def body_weight_chart(items: list[dict]) -> dict | None:
     if len(points) < MIN_LINE_POINTS:
         return None
     return _payload(
-        "bodyWeight", "line", "체중 변화", "날짜", "체중(kg)",
+        "bodyWeight", ChartType.LINE, "체중 변화", "날짜", "체중(kg)",
         [_day_label(moment) for moment, _ in points],
         "체중", [_round(weight) for _, weight in points],
     )
@@ -124,7 +125,7 @@ def bmi_chart(items: list[dict], height_cm: float | None) -> dict | None:
     height_m = float(height_cm) / 100
     values = [_round(value / (height_m * height_m)) for value in weight_chart["series"][0]["values"]]
     return _payload(
-        "bmi", "line", "BMI 추이", "날짜", "BMI",
+        "bmi", ChartType.LINE, "BMI 추이", "날짜", "BMI",
         weight_chart["x"], "BMI", values,
     )
 
@@ -147,7 +148,7 @@ def exercise_pr_chart(sets: list[dict], exercise_name: str) -> dict | None:
     if len(points) < MIN_LINE_POINTS:
         return None
     return _payload(
-        "exercisePr", "line", f"{exercise_name} 추정 1RM 추이", "날짜", "추정 1RM(kg)",
+        "exercisePr", ChartType.LINE, f"{exercise_name} 추정 1RM 추이", "날짜", "추정 1RM(kg)",
         [_day_label(moment) for moment, _ in points],
         exercise_name, [_round(e1rm) for _, e1rm in points],
     )
@@ -168,7 +169,7 @@ def workout_duration_chart(sessions: list[dict]) -> dict | None:
     if len(x) < MIN_LINE_POINTS:
         return None
     return _payload(
-        "workoutDuration", "line", "주별 평균 운동 시간", "주차", "운동 시간(분)", x, "운동 시간", values
+        "workoutDuration", ChartType.LINE, "주별 평균 운동 시간", "주차", "운동 시간(분)", x, "운동 시간", values
     )
 
 
@@ -184,7 +185,7 @@ def workout_frequency_chart(sessions: list[dict]) -> dict | None:
     x, values = _weekly_series(pairs, sum)
     if len(x) < MIN_BAR_POINTS:
         return None
-    return _payload("workoutFrequency", "bar", "주별 운동 횟수", "주차", "횟수", x, "운동 횟수", values)
+    return _payload("workoutFrequency", ChartType.BAR, "주별 운동 횟수", "주차", "횟수", x, "운동 횟수", values)
 
 
 def weekday_frequency_chart(sessions: list[dict]) -> dict | None:
@@ -200,7 +201,7 @@ def weekday_frequency_chart(sessions: list[dict]) -> dict | None:
     if total == 0:
         return None
     return _payload(
-        "weekdayFrequency", "bar", "요일별 운동 횟수", "요일", "횟수",
+        "weekdayFrequency", ChartType.BAR, "요일별 운동 횟수", "요일", "횟수",
         list(WEEKDAY_LABELS_KO), "운동 횟수", counts,
     )
 
@@ -239,7 +240,7 @@ def muscle_volume_chart(workouts: list[dict], meta_by_slug: dict, muscle: str) -
         return None
     label = MUSCLE_LABELS_KO.get(muscle, muscle)
     return _payload(
-        "muscleVolume", "line", f"{label} 볼륨 추이", "주차", "볼륨(kg)", x, label, values
+        "muscleVolume", ChartType.LINE, f"{label} 볼륨 추이", "주차", "볼륨(kg)", x, label, values
     )
 
 
@@ -252,7 +253,7 @@ def muscle_balance_chart(workouts: list[dict], meta_by_slug: dict, top_n: int = 
         return None
     ranked = sorted(totals.items(), key=lambda pair: pair[1], reverse=True)[:top_n]
     return _payload(
-        "muscleBalance", "bar", "부위별 볼륨 비중", "부위", "볼륨(kg)",
+        "muscleBalance", ChartType.BAR, "부위별 볼륨 비중", "부위", "볼륨(kg)",
         [MUSCLE_LABELS_KO.get(muscle, muscle) for muscle, _ in ranked],
         "볼륨", [_round(volume) for _, volume in ranked],
     )
@@ -275,7 +276,7 @@ def top_exercises_chart(workouts: list[dict], meta_by_slug: dict, top_n: int = 8
         return None
     ranked = sorted(counts.items(), key=lambda pair: pair[1], reverse=True)[:top_n]
     return _payload(
-        "topExercises", "bar", "많이 한 운동", "종목", "세트 수",
+        "topExercises", ChartType.BAR, "많이 한 운동", "종목", "세트 수",
         [names[slug] for slug, _ in ranked],
         "세트 수", [float(count) for _, count in ranked],
     )

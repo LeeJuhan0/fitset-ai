@@ -1,4 +1,4 @@
-"""차트 통합 테스트 — SQLite 시드 → charts.service → 직조회 repository → domain 집계.
+"""차트 통합 테스트 — SQLite 시드 → charts.service → 직조회 repository → utils 집계.
 
 metric 9종의 유즈케이스를 실제 쿼리로 태워 §7 chart payload 계약(chartType·metric·
 x·series 길이 일치)까지 확인한다. 종목 메타(주동근)는 repo 동봉 metadata 실물을 쓴다.

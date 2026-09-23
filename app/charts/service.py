@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from app.charts import domain
+from app.charts import utils
 from app.exercises.repository import get_exercise_meta
 from app.users import repository as users_repository
 from app.workouts import repository as workouts_repository
@@ -23,9 +23,9 @@ async def build_payload(
     if metric in ("bodyWeight", "bmi"):
         items = await asyncio.to_thread(users_repository.get_body_weights, user_id, days)
         if metric == "bodyWeight":
-            return domain.body_weight_chart(items)
+            return utils.body_weight_chart(items)
         profile = await asyncio.to_thread(users_repository.get_profile, user_id)
-        return domain.bmi_chart(items, profile.get("heightCm"))
+        return utils.bmi_chart(items, profile.get("heightCm"))
 
     if metric == "exercisePr":
         if exercise_slug is None:
@@ -33,15 +33,15 @@ async def build_payload(
         sets = await asyncio.to_thread(
             workouts_repository.get_exercise_sets, user_id, exercise_slug, days
         )
-        return domain.exercise_pr_chart(sets, exercise_label or exercise_slug)
+        return utils.exercise_pr_chart(sets, exercise_label or exercise_slug)
 
     if metric in ("workoutDuration", "workoutFrequency", "weekdayFrequency"):
         sessions = await asyncio.to_thread(workouts_repository.get_workout_sessions, user_id, days)
         if metric == "workoutDuration":
-            return domain.workout_duration_chart(sessions)
+            return utils.workout_duration_chart(sessions)
         if metric == "workoutFrequency":
-            return domain.workout_frequency_chart(sessions)
-        return domain.weekday_frequency_chart(sessions)
+            return utils.workout_frequency_chart(sessions)
+        return utils.weekday_frequency_chart(sessions)
 
     raw_days = min(days, WORKOUT_RAW_MAX_DAYS)
     if raw_days < days:
@@ -51,7 +51,7 @@ async def build_payload(
     if metric == "muscleVolume":
         if muscle is None:
             return None
-        return domain.muscle_volume_chart(workouts, meta, muscle)
+        return utils.muscle_volume_chart(workouts, meta, muscle)
     if metric == "muscleBalance":
-        return domain.muscle_balance_chart(workouts, meta)
-    return domain.top_exercises_chart(workouts, meta)
+        return utils.muscle_balance_chart(workouts, meta)
+    return utils.top_exercises_chart(workouts, meta)
