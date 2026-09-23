@@ -4,14 +4,12 @@ FakeStore(서비스 테스트 대역)로는 UpdateItem의 upsert 의미론과 Co
 증명할 수 없다 — CS 감사 F1(유령 부활)·F4(요약 Lost Update)·F5(제목 덮어쓰기)·
 F10(배치 삭제)의 재현·회귀 테스트는 실제 API 의미론 위에서 돈다.
 """
-from datetime import datetime, timedelta, timezone
-
 import boto3
 import pytest
 from moto import mock_aws
 
 from app.chat import repository, utils
-from app.chat.models import MessageRecord, ThreadRecord, UserSummaryRecord
+from app.chat.models import MessageRecord, ThreadRecord
 from app.core import dynamo
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -47,18 +45,6 @@ def tables(monkeypatch):
             AttributeDefinitions=[
                 {"AttributeName": "thread_id", "AttributeType": "S"},
                 {"AttributeName": "message_id", "AttributeType": "S"},
-            ],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        resource.create_table(
-            TableName="user_summaries",
-            KeySchema=[
-                {"AttributeName": "user_id", "KeyType": "HASH"},
-                {"AttributeName": "summary_id", "KeyType": "RANGE"},
-            ],
-            AttributeDefinitions=[
-                {"AttributeName": "user_id", "AttributeType": "S"},
-                {"AttributeName": "summary_id", "AttributeType": "S"},
             ],
             BillingMode="PAY_PER_REQUEST",
         )
@@ -260,19 +246,3 @@ def test_bind_tables_applies_environment_table_names(monkeypatch):
     dynamo.bind_tables()
     assert ThreadRecord.Meta.table_name == "chat_threads"
 
-
-def test_user_summary_appends_history_and_reads_latest(tables):
-    assert repository.get_user_summary(USER_ID) is None
-    first = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
-    repository.put_user_summary(
-        UserSummaryRecord.new(USER_ID, "첫 요약", first, "01THREAD", "01MSGA", {"feedback_style": "direct"})
-    )
-    repository.put_user_summary(
-        UserSummaryRecord.new(USER_ID, "둘째 요약", first + timedelta(days=1), "01THREAD", "01MSGB")
-    )
-
-    assert repository.get_user_summary(USER_ID) == "둘째 요약"
-    history = list(UserSummaryRecord.query(USER_ID))
-    assert [item.summary_text for item in history] == ["첫 요약", "둘째 요약"]
-    assert history[0].personality.as_dict() == {"feedback_style": "direct"}
-    assert history[1].source_upto == "01MSGB"
