@@ -95,7 +95,8 @@ async def list_messages(user_id: str, thread_id: str, limit: int, cursor: str | 
 
 @dataclass
 class _Turn:
-    system_prompt: str
+    user_message: MessageRecord
+    context: str | None
     history: list
     title_task: asyncio.Task | None
 
@@ -115,7 +116,7 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
 
     result = None
     try:
-        async for kind, value in graph.run_turn_stream(user_id, turn.system_prompt, turn.history):
+        async for kind, value in graph.run_turn_stream(user_id, turn.context, turn.history):
             if kind == graph.GraphEvent.DELTA:
                 yield StreamKind.DELTA, value
                 continue
@@ -131,14 +132,14 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
     try:
         data = await _persist_answer(user_id, thread_id, result, turn)
     except Exception:
-        logger.exception("assistant persist failed")
+        logger.exception("turn persist failed")
         yield StreamKind.ERROR, DomainError()
         return
     yield StreamKind.DONE, data
 
 
 async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
-    """레이트리밋 스레드 상한 검증 후 유저 메시지 저장"""
+    """레이트리밋 스레드 상한 검증, 유저 메시지는 채번만 하고 저장은 턴 끝"""
     settings = get_settings()
     if not chat_limiter().allow(user_id):
         raise RateLimitedError()
@@ -153,21 +154,19 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
         raise ThreadFullError()
 
     now = clock.now_utc()
-    await asyncio.to_thread(
-        repository.put_message,
-        MessageRecord(
-            thread_id=thread_id,
-            message_id=new_ulid(now),
-            user_id=user_id,
-            role=MessageRole.USER,
-            content=content,
-            created_at=clock.iso_utc(now),
-        ),
+    user_message = MessageRecord(
+        thread_id=thread_id,
+        message_id=new_ulid(now),
+        user_id=user_id,
+        role=MessageRole.USER,
+        content=content,
+        created_at=clock.iso_utc(now),
     )
 
     return _Turn(
-        system_prompt=prompts.chat_system(user_summary, thread.summary_text),
-        history=[*_to_lc_messages(recent), HumanMessage(content=content)],
+        user_message=user_message,
+        context=prompts.chat_context(user_summary, thread.summary_text),
+        history=[*_to_lc_messages(utils.context_messages(recent)), HumanMessage(content=content)],
         title_task=asyncio.create_task(_make_title(content)) if thread.title is None else None,
     )
 
@@ -175,7 +174,7 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
 async def _persist_answer(
     user_id: str, thread_id: str, result: graph.AgentResult, turn: _Turn
 ) -> MessageSendData:
-    """어시스턴트 메시지 저장과 스레드 활동 시각 갱신"""
+    """유저 어시스턴트 메시지와 스레드 활동 시각 한 트랜잭션 저장"""
     settings = get_settings()
     title = await turn.title()
     answered_at = clock.now_utc()
@@ -189,11 +188,11 @@ async def _persist_answer(
         payload=result.payload,
         created_at=clock.iso_utc(answered_at),
     )
-    await asyncio.to_thread(repository.put_message, assistant_message)
     await asyncio.to_thread(
-        repository.touch_thread,
+        repository.save_turn,
+        turn.user_message,
+        assistant_message,
         user_id,
-        thread_id,
         clock.iso_utc(answered_at),
         utils.ttl_epoch(answered_at, settings.thread_ttl_days),
         title,
@@ -223,7 +222,10 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     if not fresh:
         return None
 
-    transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in fresh)
+    answered = utils.context_messages(fresh)
+    if not answered:
+        return None
+    transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in answered)
     system, user = prompts.summarize_thread(thread.summary_text, transcript)
     summary_text = await asyncio.to_thread(bedrock.try_complete, "thread summary", system, user, 600)
     if summary_text is None:
@@ -255,7 +257,7 @@ async def _purge_thread(user_id: str, thread_id: str) -> None:
     await asyncio.to_thread(repository.delete_thread, user_id, thread_id)
     try:
         await asyncio.to_thread(repository.delete_messages, thread_id)
-    except Exception:
+    except DomainError:
         logger.exception("message purge failed, leaving orphans for batch: %s", thread_id)
     return None
 

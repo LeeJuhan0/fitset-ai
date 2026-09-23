@@ -72,14 +72,17 @@ class InMemoryChatStore:
     def delete_thread(self, user_id, thread_id):
         self.threads.pop((user_id, thread_id), None)
 
-    def touch_thread(self, user_id, thread_id, last_message_at, expires_at, title=None):
-        thread = self.threads.get((user_id, thread_id))
+    def save_turn(self, user_message, assistant_message, user_id, last_message_at, expires_at, title=None):
+        thread = self.threads.get((user_id, user_message.thread_id))
         if thread is None:
-            return
+            return False
+        for message in (user_message, assistant_message):
+            self.messages.setdefault(message.thread_id, []).append(dict(message.attribute_values))
         thread.last_message_at = last_message_at
         thread.expires_at = expires_at
         if title is not None and thread.title is None:
             thread.title = title
+        return True
 
     def save_summary(self, user_id, thread_id, summary_text, summary_upto):
         thread = self.threads.get((user_id, thread_id))
@@ -107,9 +110,6 @@ class InMemoryChatStore:
 
     def count_messages(self, thread_id, after):
         return len(self.messages_after(thread_id, after))
-
-    def put_message(self, item):
-        self.messages.setdefault(item["thread_id"], []).append(dict(item))
 
     def delete_messages(self, thread_id):
         self.messages.pop(thread_id, None)
@@ -359,9 +359,9 @@ def _install_fake_llm():
 def patch_everything(fake_llm: bool):
     chat_store = InMemoryChatStore()
     for name in (
-        "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
+        "list_threads", "get_thread", "put_thread", "delete_thread", "save_turn",
         "save_summary", "messages_page", "recent_messages", "messages_after",
-        "count_messages", "put_message", "delete_messages",
+        "count_messages", "delete_messages",
     ):
         setattr(repository, name, getattr(chat_store, name))
     for name in ("get_user_summary", "put_user_summary"):

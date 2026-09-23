@@ -1,10 +1,41 @@
+import functools
+from functools import lru_cache
+
+from pynamodb.connection import Connection
+from pynamodb.exceptions import PynamoDBException
 from pynamodb.models import Model
 
 from app.core.config import get_settings
+from app.core.exceptions import DomainError
 
 
 class DynamoModel(Model):
     """DynamoDB 모델 공통 베이스 논리 테이블명 선언"""
+
+
+def storage_errors(fn):
+    """repository 데코레이터, PynamoDB 예외를 DomainError 로 번역"""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        """저장소 호출, 라이브러리 예외 번역"""
+        try:
+            return fn(*args, **kwargs)
+        except PynamoDBException as exc:
+            raise DomainError("대화 저장소 처리에 실패했습니다.") from exc
+    return wrapper
+
+
+@lru_cache
+def connection() -> Connection:
+    """트랜잭션용 DynamoDB 커넥션 전역 싱글턴, 모델과 같은 접속 설정"""
+    settings = get_settings()
+    return Connection(
+        region=settings.aws_region,
+        connect_timeout_seconds=settings.dynamo_connect_timeout,
+        read_timeout_seconds=settings.dynamo_read_timeout,
+        max_retry_attempts=settings.dynamo_max_attempts,
+        max_pool_connections=settings.executor_max_workers,
+    )
 
 
 def bind_tables() -> None:
@@ -21,3 +52,4 @@ def bind_tables() -> None:
         meta.max_retry_attempts = settings.dynamo_max_attempts
         meta.max_pool_connections = settings.executor_max_workers
         model._connection = None
+    connection.cache_clear()

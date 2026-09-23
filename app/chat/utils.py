@@ -24,6 +24,17 @@ def sorted_by_activity(threads: list["ThreadRecord"]) -> list["ThreadRecord"]:
     return sorted(threads, key=_activity_key, reverse=True)
 
 
+def context_messages(messages: list["MessageRecord"]) -> list["MessageRecord"]:
+    """LLM 이력용, 답변 없는 유저 메시지 제외, 옛 실패 턴 안전망"""
+    kept = []
+    for current, following in zip(messages, [*messages[1:], None]):
+        answered = following is not None and following.role == MessageRole.ASSISTANT
+        if current.role == MessageRole.USER and not answered:
+            continue
+        kept.append(current)
+    return kept
+
+
 def fallback_title(content: str, max_length: int) -> str:
     """제목 생성 실패 시 첫 발화 앞부분 폴백 제목"""
     stripped = " ".join(content.split())
