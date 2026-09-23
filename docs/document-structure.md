@@ -33,16 +33,18 @@ Table chat_threads {
 }
 
 Table user_summaries {
-  user_id uuid [pk, note: 'Partition Key (SK 없음) — 항상 GetItem 단건 조회']
-  summary_text text [note: 'LLM 생성 유저 요약본 (최근 선호 운동, 목표, 제약)']
-  created_at datetime
-  updated_at datetime
+  user_id varchar [pk, note: 'Partition Key, Query 로 이력 조회']
+  summary_id varchar [pk, note: 'Sort Key, ULID, 시간순 정렬, 최신은 Query 역순 Limit 1']
+  summary_text text [note: '유저 장기 요약본']
+  personality map [note: '성향, 목표, 선호 종목, 숙련도']
+  created_at varchar [note: 'ISO 8601, 아이템 생성 시각']
+  source_thread_id varchar [note: '요약 근거 스레드']
+  source_upto varchar [note: '반영한 마지막 message_id']
 
   Note: '''
-  장기 메모리 (유저 요약본) — DynamoDB 테이블 (온디맨드, TTL 없음)
-  - 영속, 삭제 없음
-  - 매 요청 GetItem(user_id)으로 읽어 시스템 프롬프트 주입
-  - n턴 이후 요약 업데이트 (백그라운드)
+  장기 메모리, DynamoDB 온디맨드
+  - 매 요청 최신 1건 시스템 프롬프트 주입
+  - 백그라운드 갱신 시 새 아이템 PutItem
   '''
 }
 
