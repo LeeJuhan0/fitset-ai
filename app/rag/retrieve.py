@@ -1,11 +1,16 @@
-from dataclasses import dataclass
+import asyncio
+import logging
+from dataclasses import dataclass, replace
 
 import numpy as np
 from sqlalchemy import or_, select
 
 from app.clients import postgres
+from app.core.config import get_settings
 from app.routines.models import Routine
 from app.routines.utils import LEVEL_ORDER
+
+logger = logging.getLogger("fitset")
 
 LEVEL_NAME = {order: name for name, order in LEVEL_ORDER.items()}
 
@@ -52,3 +57,14 @@ def search(filters: SearchFilters, query_vector, limit: int) -> list[dict]:
         {**row, "level": LEVEL_NAME.get(row["level"], "beginner"), "minutes_per_routine": row.pop("minutes")}
         for row in rows
     ]
+
+
+async def top_candidates(filters: SearchFilters, parsed_avoided: set[str], query_vector) -> list[dict]:
+    """코사인 상위 후보, 문맥 기피로 비면 그것만 풀어 재검색"""
+    limit = get_settings().cosine_top_k
+    strict = replace(filters, avoided=filters.avoided | parsed_avoided)
+    top = await asyncio.to_thread(search, strict, query_vector, limit)
+    if top or not parsed_avoided:
+        return top
+    logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed_avoided))
+    return await asyncio.to_thread(search, filters, query_vector, limit)
