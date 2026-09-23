@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent import graph, prompts
-from app.chat import domain, repository
+from app.chat import repository, utils
+from app.chat.enums import MessageRole, StreamKind
+from app.chat.models import MessageRecord, ThreadRecord, UserSummaryRecord
 from app.chat.exceptions import (
     ThreadExpiredError,
     ThreadFullError,
@@ -21,6 +23,7 @@ from app.chat.schemas import (
     ThreadOut,
 )
 from app.core import clock, llm, ratelimit
+from app.core.ulid import new_ulid
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, DomainError, RateLimitedError
 
@@ -32,7 +35,7 @@ async def list_threads(user_id: str) -> ThreadListData:
     settings = get_settings()
     now = clock.now_utc()
     threads = await asyncio.to_thread(repository.list_threads, user_id)
-    visible = domain.sorted_by_activity(threads)[: settings.max_threads_per_user]
+    visible = utils.sorted_by_activity(threads)[: settings.max_threads_per_user]
     return ThreadListData(
         items=[
             ThreadOut(
@@ -55,7 +58,7 @@ async def create_thread(user_id: str) -> ThreadCreated:
     if len(threads) >= settings.max_threads_per_user:
         raise ThreadQuotaExceededError()
 
-    record = domain.ThreadRecord.open(user_id, now, settings.thread_ttl_days)
+    record = ThreadRecord.open(user_id, now, settings.thread_ttl_days)
     await asyncio.to_thread(repository.put_thread, record)
     return ThreadCreated(thread_id=record.thread_id, created_at=record.created_at)
 
@@ -75,7 +78,7 @@ async def list_messages(user_id: str, thread_id: str, limit: int, cursor: str | 
         return MessagePageData(items=[], next_cursor=None)
     items, next_cursor = await asyncio.to_thread(repository.messages_page, thread_id, limit, cursor)
     return MessagePageData(
-        items=[MessageOut(**domain.to_message_view(item)) for item in items],
+        items=[MessageOut(**utils.to_message_view(item)) for item in items],
         next_cursor=next_cursor,
     )
 
@@ -104,7 +107,7 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
     try:
         async for kind, value in graph.run_turn_stream(user_id, turn.system_prompt, turn.history):
             if kind == graph.GraphEvent.DELTA:
-                yield domain.StreamKind.DELTA, value
+                yield StreamKind.DELTA, value
                 continue
             result = value
     except Exception:
@@ -112,16 +115,16 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
         result = None
     if result is None:
         turn.cancel_title()
-        yield domain.StreamKind.ERROR, AiUnavailableError()
+        yield StreamKind.ERROR, AiUnavailableError()
         return
 
     try:
         data = await _persist_answer(user_id, thread_id, result, turn)
     except Exception:
         logger.exception("assistant persist failed")
-        yield domain.StreamKind.ERROR, DomainError()
+        yield StreamKind.ERROR, DomainError()
         return
-    yield domain.StreamKind.DONE, data
+    yield StreamKind.DONE, data
 
 
 async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
@@ -142,11 +145,11 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
     now = clock.now_utc()
     await asyncio.to_thread(
         repository.put_message,
-        domain.MessageRecord(
+        MessageRecord(
             thread_id=thread_id,
-            message_id=domain.new_ulid(now),
+            message_id=new_ulid(now),
             user_id=user_id,
-            role="user",
+            role=MessageRole.USER,
             content=content,
             created_at=clock.iso_utc(now),
         ),
@@ -166,11 +169,11 @@ async def _persist_answer(
     settings = get_settings()
     title = await turn.title()
     answered_at = clock.now_utc()
-    assistant_message = domain.MessageRecord(
+    assistant_message = MessageRecord(
         thread_id=thread_id,
-        message_id=domain.new_ulid(answered_at),
+        message_id=new_ulid(answered_at),
         user_id=user_id,
-        role="assistant",
+        role=MessageRole.ASSISTANT,
         content=result.content,
         response_scheme=result.response_scheme,
         payload=result.payload,
@@ -182,11 +185,11 @@ async def _persist_answer(
         user_id,
         thread_id,
         clock.iso_utc(answered_at),
-        domain.ttl_epoch(answered_at, settings.thread_ttl_days),
+        utils.ttl_epoch(answered_at, settings.thread_ttl_days),
         title,
     )
     return MessageSendData(
-        message=MessageOut(**domain.to_message_view(assistant_message)),
+        message=MessageOut(**utils.to_message_view(assistant_message)),
         thread_title=title,
     )
 
@@ -201,7 +204,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     pending = await asyncio.to_thread(
         repository.count_messages, thread_id, thread.summary_upto
     )
-    if not domain.needs_summary(pending, settings.summary_trigger_turns):
+    if not utils.needs_summary(pending, settings.summary_trigger_turns):
         return None
 
     fresh = await asyncio.to_thread(
@@ -228,7 +231,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
         return None
     await asyncio.to_thread(
         repository.put_user_summary,
-        domain.UserSummaryRecord.new(
+        UserSummaryRecord.new(
             user_id, merged.strip(), clock.now_utc(), thread_id, fresh[-1].message_id
         ),
     )
@@ -237,7 +240,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
 async def _load_thread(
     user_id: str, thread_id: str, allow_expired: bool = False
-) -> domain.ThreadRecord:
+) -> ThreadRecord:
     """스레드 조회 부재는 404 만료는 409"""
     thread = await asyncio.to_thread(repository.get_thread, user_id, thread_id)
     if thread is None:
@@ -263,19 +266,19 @@ async def _make_title(first_message: str) -> str:
     system, user = prompts.make_title(first_message)
     title = await asyncio.to_thread(llm.try_complete, "title", system, user, 40)
     if title is None:
-        return domain.fallback_title(first_message, settings.chat_title_max_length)
+        return utils.fallback_title(first_message, settings.chat_title_max_length)
     title = title.strip().strip('"')
     if not title:
-        return domain.fallback_title(first_message, settings.chat_title_max_length)
-    return domain.fallback_title(title, settings.chat_title_max_length)
+        return utils.fallback_title(first_message, settings.chat_title_max_length)
+    return utils.fallback_title(title, settings.chat_title_max_length)
 
 
-def _to_lc_messages(items: list[domain.MessageRecord]) -> list:
+def _to_lc_messages(items: list[MessageRecord]) -> list:
     """저장 메시지를 LangChain 메시지 목록으로 변환"""
     converted = []
     for item in items:
         text = item.content or ""
-        if item.role == "assistant":
+        if item.role == MessageRole.ASSISTANT:
             converted.append(AIMessage(content=text))
         else:
             converted.append(HumanMessage(content=text))

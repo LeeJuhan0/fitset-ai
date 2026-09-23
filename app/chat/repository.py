@@ -2,7 +2,7 @@ import logging
 
 from pynamodb.exceptions import UpdateError
 
-from app.chat.domain import MessageRecord, ThreadRecord, UserSummaryRecord
+from app.chat.models import MessageRecord, ThreadRecord, UserSummaryRecord
 
 logger = logging.getLogger("fitset")
 

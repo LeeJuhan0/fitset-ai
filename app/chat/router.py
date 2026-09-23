@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from app import deps
 from app.chat import service
-from app.chat.domain import StreamKind
+from app.chat.enums import StreamKind
 from app.chat.schemas import (
     MessagePageData,
     MessageSendRequest,

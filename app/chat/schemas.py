@@ -1,10 +1,7 @@
-from typing import Literal
-
 from pydantic import Field
 
+from app.chat.enums import MessageRole
 from app.core.schemas import CamelModel, ErrorResponse, ResponseScheme
-
-Role = Literal["user", "assistant"]
 
 
 class ThreadOut(CamelModel):
@@ -26,7 +23,7 @@ class ThreadCreated(CamelModel):
 
 class MessageOut(CamelModel):
     message_id: str
-    role: Role
+    role: MessageRole
     content: str
     response_scheme: ResponseScheme | None
     payload: dict | None
