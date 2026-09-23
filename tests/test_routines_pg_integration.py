@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 
 from app.clients import postgres
 from app.core.exceptions import DomainError
-from app.routines import repository
+from app.rag import retrieve
 from app.routines.models import Routine
 
 DSN = os.environ.get("PG_TEST_DSN")
@@ -92,13 +92,13 @@ def client(monkeypatch, seeded):
 
 
 def _slugs(filters):
-    return [row["slug"] for row in repository.search(filters, QUERY, 30)]
+    return [row["slug"] for row in retrieve.search(filters, QUERY, 30)]
 
 
 def _filters(**overrides):
     base = dict(muscle_groups=["chest"], avoided=set(), level="beginner", minutes=60, tolerance=0.2, home_only=False)
     base.update(overrides)
-    return repository.SearchFilters(**base)
+    return retrieve.SearchFilters(**base)
 
 
 def test_muscle_intersection_and_cosine_order(client):
