@@ -9,8 +9,8 @@ from sqlalchemy import Select, func, select
 from app.clients import mysql
 from app.core import clock
 from app.exercises import repository as exercise_catalog
-from app.exercises.domain import Exercise
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.exercises.models import Exercise
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 
 logger = logging.getLogger("fitset")
 

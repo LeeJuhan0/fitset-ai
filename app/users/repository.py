@@ -4,8 +4,8 @@ from sqlalchemy import select
 
 from app.clients import mysql
 from app.core import clock
-from app.exercises.domain import Muscle
-from app.users.domain import BodyWeightHistory, UserAvoidedMuscle, UserProfile
+from app.exercises.models import Muscle
+from app.users.models import BodyWeightHistory, UserAvoidedMuscle, UserProfile
 from app.users.exceptions import UserNotFoundError
 
 

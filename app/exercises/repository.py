@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.clients import mysql
 from app.core.config import get_settings
-from app.exercises.domain import CatalogEntry, Equipment, Exercise, ExerciseMuscle, Muscle
+from app.exercises.models import CatalogEntry, Equipment, Exercise, ExerciseMuscle, Muscle
 from app.exercises.exceptions import ExerciseNotFoundError
 
 logger = logging.getLogger("fitset")

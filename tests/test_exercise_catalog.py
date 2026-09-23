@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core import dynamo  # noqa: E402
 from app.exercises import repository  # noqa: E402
-from app.exercises.domain import CatalogEntry  # noqa: E402
+from app.exercises.models import CatalogEntry  # noqa: E402
 from scripts.sync_exercise_catalog import build_items, put_items  # noqa: E402
 
 BACKEND_SAMPLE = {

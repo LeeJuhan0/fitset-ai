@@ -6,11 +6,11 @@ None·빈 목록을 만나는 경계 상황이 구 내부 API와 같은 모양�
 from datetime import datetime, timedelta, timezone
 
 from app.clients import mysql
-from app.exercises.domain import Equipment, Exercise
+from app.exercises.models import Equipment, Exercise
 from app.users import repository as users_repository
-from app.users.domain import UserProfile
+from app.users.models import UserProfile
 from app.workouts import repository as workouts_repository
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -45,7 +45,7 @@ def test_profile_without_weight_log_returns_null_weight(backend_engine):
 
 
 def test_body_weights_outside_window_are_excluded(backend_engine):
-    from app.users.domain import BodyWeightHistory
+    from app.users.models import BodyWeightHistory
 
     seed(backend_engine, [_profile(), BodyWeightHistory(
         id=uid("bw"), user_id=mysql.uuid_bytes(USER_ID),

@@ -7,9 +7,9 @@ from datetime import datetime, timedelta, timezone
 
 from app.charts import service as charts_service
 from app.clients import mysql
-from app.exercises.domain import Equipment, Exercise
-from app.users.domain import BodyWeightHistory, UserProfile
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.exercises.models import Equipment, Exercise
+from app.users.models import BodyWeightHistory, UserProfile
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core import dynamo  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
-from app.exercises.domain import CatalogEntry  # noqa: E402
+from app.exercises.models import CatalogEntry  # noqa: E402
 
 
 def fetch_backend_catalog(url: str, timeout: float) -> dict[str, dict]:

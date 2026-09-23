@@ -12,9 +12,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.clients import mysql
 from app.core.orm import BackendBase
-from app.exercises import domain as exercises_domain   # noqa: F401 — 테이블 등록
-from app.users import domain as users_domain           # noqa: F401
-from app.workouts import domain as workouts_domain     # noqa: F401
+from app.exercises import models as exercises_models   # noqa: F401 — 테이블 등록
+from app.users import models as users_models           # noqa: F401
+from app.workouts import models as workouts_models     # noqa: F401
 
 
 def uid(seed: str) -> bytes:

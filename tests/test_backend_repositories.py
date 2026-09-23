@@ -15,11 +15,11 @@ from app.exercises.exceptions import ExerciseNotFoundError
 from app.users.exceptions import UserNotFoundError
 from app.core.orm import BackendBase
 from app.exercises import repository as exercises_repository
-from app.exercises.domain import Equipment, Exercise, ExerciseMuscle, Muscle
+from app.exercises.models import Equipment, Exercise, ExerciseMuscle, Muscle
 from app.users import repository as users_repository
-from app.users.domain import BodyWeightHistory, UserAvoidedMuscle, UserProfile
+from app.users.models import BodyWeightHistory, UserAvoidedMuscle, UserProfile
 from app.workouts import repository as workouts_repository
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 # DB 저장 형식과 동일한 naive UTC — repository의 _cutoff 비교 대상

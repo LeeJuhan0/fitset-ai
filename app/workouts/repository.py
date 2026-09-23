@@ -4,8 +4,8 @@ from sqlalchemy import select
 
 from app.clients import mysql
 from app.core import clock
-from app.exercises.domain import Exercise
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.exercises.models import Exercise
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 
 
 def _cutoff(days: int) -> datetime:

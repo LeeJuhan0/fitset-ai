@@ -9,8 +9,8 @@ import pytest
 
 from app.agent import tools
 from app.clients import mysql
-from app.exercises.domain import Equipment, Exercise
-from app.workouts.domain import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from app.exercises.models import Equipment, Exercise
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
