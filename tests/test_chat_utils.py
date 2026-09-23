@@ -126,3 +126,23 @@ def test_to_message_view_keeps_assistant_payload():
     view = utils.to_message_view(stored)
     assert view["response_scheme"] == "chart"
     assert view["payload"] == {"x": ["7/1"]}
+
+
+def _msg(message_id: str, role: str) -> MessageRecord:
+    return MessageRecord(thread_id="T", message_id=message_id, role=role, content=message_id)
+
+
+def test_context_messages_drops_unanswered_user_turns():
+    messages = [
+        _msg("01", "user"), _msg("02", "assistant"),
+        _msg("03", "user"),
+        _msg("04", "user"),
+        _msg("05", "user"), _msg("06", "assistant"),
+        _msg("07", "user"),
+    ]
+    assert [m.message_id for m in utils.context_messages(messages)] == ["01", "02", "05", "06"]
+
+
+def test_context_messages_keeps_answered_pairs():
+    messages = [_msg("01", "user"), _msg("02", "assistant")]
+    assert utils.context_messages(messages) == messages

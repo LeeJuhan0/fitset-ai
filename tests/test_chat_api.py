@@ -9,6 +9,7 @@ import json
 import time
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
 from app.auth import deps as auth_deps
@@ -19,6 +20,12 @@ from app.memory import repository as memory_repository
 from app.chat.models import MessageRecord, ThreadRecord
 from app.clients import bedrock
 from app.main import app
+
+
+def _bedrock_down() -> ClientError:
+    """Bedrock 장애와 같은 형태의 예외"""
+    return ClientError({"Error": {"Code": "ServiceUnavailableException", "Message": "down"}}, "Converse")
+
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -55,12 +62,17 @@ class FakeStore:
     def delete_thread(self, user_id, thread_id):
         self.threads.pop((user_id, thread_id), None)
 
-    def touch_thread(self, user_id, thread_id, last_message_at, expires_at, title=None):
-        thread = self.threads[(user_id, thread_id)]
+    def save_turn(self, user_message, assistant_message, user_id, last_message_at, expires_at, title=None):
+        thread = self.threads.get((user_id, user_message.thread_id))
+        if thread is None:
+            return False
+        for message in (user_message, assistant_message):
+            self.messages.setdefault(message.thread_id, []).append(_stored(message))
         thread.last_message_at = last_message_at
         thread.expires_at = expires_at
-        if title is not None:
+        if title is not None and thread.title is None:
             thread.title = title
+        return True
 
     def save_summary(self, user_id, thread_id, summary_text, summary_upto):
         thread = self.threads[(user_id, thread_id)]
@@ -98,9 +110,6 @@ class FakeStore:
     def recent_messages(self, thread_id, limit):
         return [MessageRecord(**m) for m in self._sorted_messages(thread_id)[-limit:]]
 
-    def put_message(self, message):
-        self.messages.setdefault(message.thread_id, []).append(_stored(message))
-
     def delete_messages(self, thread_id):
         self.messages.pop(thread_id, None)
 
@@ -115,8 +124,8 @@ class FakeStore:
 def store(monkeypatch):
     fake = FakeStore()
     for name in (
-        "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
-        "save_summary", "messages_page", "recent_messages", "put_message",
+        "list_threads", "get_thread", "put_thread", "delete_thread", "save_turn",
+        "save_summary", "messages_page", "recent_messages",
         "delete_messages", "count_messages", "messages_after",
     ):
         monkeypatch.setattr(repository, name, getattr(fake, name))
@@ -126,7 +135,7 @@ def store(monkeypatch):
     service.chat_limiter.cache_clear()
     routines_service.routine_limiter.cache_clear()
     # 제목·요약 LLM은 부르지 않는다 — 폴백 경로로 떨어뜨려 Bedrock 의존을 끊는다
-    monkeypatch.setattr(bedrock, "complete", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(bedrock, "complete", lambda *args, **kwargs: (_ for _ in ()).throw(_bedrock_down()))
     return fake
 
 
@@ -428,9 +437,9 @@ async def test_refresh_summarizes_only_unsummarized_tail(store, monkeypatch):
     store.threads[(USER_ID, "01TX")].summary_text = "이전 요약"
     store.messages["01TX"] = [
         {"thread_id": "01TX", "message_id": f"M{index:04d}", "user_id": USER_ID,
-         "role": "user", "content": f"msg-{index}", "response_scheme": None,
+         "role": "user" if index % 2 else "assistant", "content": f"msg-{index}", "response_scheme": None,
          "payload": None, "created_at": "2026-07-29T00:00:00Z"}
-        for index in range(1, 16)   # M0001~M0015 — upto 이후 10건 = 임계 도달
+        for index in range(1, 16)   # M0001~M0015 유저 어시스턴트 교대 — upto 이후 10건 = 임계 도달
     ]
     store.list_messages_calls = 0
 
@@ -473,8 +482,8 @@ def test_mid_stream_failure_emits_error_event(client, monkeypatch, store):
     assert kind == "error"
     assert data["error"]["code"] == "AI_UNAVAILABLE"
     assert data["traceId"]
-    # 실패 턴은 assistant를 저장하지 않는다 — user 메시지만 남는다 (§4.6 규약 5)
-    assert [m["role"] for m in store.messages[thread_id]] == ["user"]
+    # 실패 턴은 아무것도 저장하지 않는다 — 유저 어시스턴트 메시지를 턴 끝에 한 트랜잭션으로 쓴다
+    assert store.messages.get(thread_id) is None
 
 
 def test_sse_조각은_생성되는_즉시_나간다_버퍼링_없음(client, monkeypatch, store):
@@ -537,3 +546,24 @@ def test_sse_조각은_생성되는_즉시_나간다_버퍼링_없음(client, mo
     # 첫·끝 조각의 도착 간격이 생성 간격(2×delay)만큼 벌어져 있어야 한다
     spread = delta_times[-1] - delta_times[0]
     assert spread > delay * 1.5, f"delta들이 {spread:.3f}s 안에 몰려 도착 — 버퍼링 의심"
+
+
+def test_failed_turn_is_not_stored_nor_in_next_history(client, monkeypatch, store):
+    async def boom(user_id, context, history):
+        raise RuntimeError("bedrock down")
+        yield
+
+    monkeypatch.setattr(graph, "run_turn_stream", boom)
+    thread_id = client.post("/ai/v1/threads").json()["data"]["threadId"]
+    client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "실패한 질문"})
+    assert store.messages.get(thread_id) is None
+
+    seen = {}
+
+    async def capture(user_id, context, history):
+        seen["history"] = [message.content for message in history]
+        yield "result", graph.AgentResult("답", "text", None)
+
+    monkeypatch.setattr(graph, "run_turn_stream", capture)
+    client.post(f"/ai/v1/threads/{thread_id}/messages", json={"content": "새 질문"})
+    assert seen["history"] == ["새 질문"]
