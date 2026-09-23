@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from functools import lru_cache
 from dataclasses import dataclass
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -7,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.agent import graph, prompts
 from app.chat import repository, utils
 from app.chat.enums import MessageRole, StreamKind
-from app.chat.models import MessageRecord, ThreadRecord, UserSummaryRecord
+from app.chat.models import MessageRecord, ThreadRecord
 from app.chat.exceptions import (
     ThreadExpiredError,
     ThreadFullError,
@@ -22,12 +23,21 @@ from app.chat.schemas import (
     ThreadListData,
     ThreadOut,
 )
-from app.core import clock, llm, ratelimit
+from app.core import clock
+from app.core.ratelimit import RateLimiter
+from app.clients import bedrock
 from app.core.ulid import new_ulid
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, DomainError, RateLimitedError
+from app.memory import service as memory_service
 
 logger = logging.getLogger("fitset")
+
+
+@lru_cache
+def chat_limiter() -> RateLimiter:
+    """유저별 메시지 전송 레이트리미터 전역 싱글턴"""
+    return RateLimiter(get_settings().chat_messages_per_minute)
 
 
 async def list_threads(user_id: str) -> ThreadListData:
@@ -130,12 +140,12 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
 async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
     """레이트리밋 스레드 상한 검증 후 유저 메시지 저장"""
     settings = get_settings()
-    if not ratelimit.chat_limiter().allow(user_id):
+    if not chat_limiter().allow(user_id):
         raise RateLimitedError()
     thread = await _load_thread(user_id, thread_id)
 
     user_summary, recent, total_messages = await asyncio.gather(
-        asyncio.to_thread(repository.get_user_summary, user_id),
+        memory_service.latest_summary(user_id),
         asyncio.to_thread(repository.recent_messages, thread_id, settings.chat_context_turns),
         asyncio.to_thread(repository.count_messages, thread_id, None),
     )
@@ -215,7 +225,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
 
     transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in fresh)
     system, user = prompts.summarize_thread(thread.summary_text, transcript)
-    summary_text = await asyncio.to_thread(llm.try_complete, "thread summary", system, user, 600)
+    summary_text = await asyncio.to_thread(bedrock.try_complete, "thread summary", system, user, 600)
     if summary_text is None:
         return None
 
@@ -224,17 +234,7 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
         repository.save_summary, user_id, thread_id, summary_text, fresh[-1].message_id
     )
 
-    previous = await asyncio.to_thread(repository.get_user_summary, user_id)
-    system, user = prompts.summarize_user(previous, summary_text)
-    merged = await asyncio.to_thread(llm.try_complete, "user summary", system, user, 500)
-    if merged is None:
-        return None
-    await asyncio.to_thread(
-        repository.put_user_summary,
-        UserSummaryRecord.new(
-            user_id, merged.strip(), clock.now_utc(), thread_id, fresh[-1].message_id
-        ),
-    )
+    await memory_service.merge_thread_summary(user_id, thread_id, summary_text, fresh[-1].message_id)
     return None
 
 
@@ -264,7 +264,7 @@ async def _make_title(first_message: str) -> str:
     """첫 발화로 스레드 제목 생성 실패 시 폴백"""
     settings = get_settings()
     system, user = prompts.make_title(first_message)
-    title = await asyncio.to_thread(llm.try_complete, "title", system, user, 40)
+    title = await asyncio.to_thread(bedrock.try_complete, "title", system, user, 40)
     if title is None:
         return utils.fallback_title(first_message, settings.chat_title_max_length)
     title = title.strip().strip('"')

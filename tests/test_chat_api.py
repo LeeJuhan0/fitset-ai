@@ -11,11 +11,13 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from app import deps
+from app.auth import deps as auth_deps
 from app.agent import graph
 from app.chat import repository, service
+from app.routines import service as routines_service
+from app.memory import repository as memory_repository
 from app.chat.models import MessageRecord, ThreadRecord
-from app.core import llm, ratelimit
+from app.clients import bedrock
 from app.main import app
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -115,15 +117,16 @@ def store(monkeypatch):
     for name in (
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
         "save_summary", "messages_page", "recent_messages", "put_message",
-        "delete_messages", "get_user_summary", "put_user_summary",
-        "count_messages", "messages_after",
+        "delete_messages", "count_messages", "messages_after",
     ):
         monkeypatch.setattr(repository, name, getattr(fake, name))
+    for name in ("get_user_summary", "put_user_summary"):
+        monkeypatch.setattr(memory_repository, name, getattr(fake, name))
     # 레이트리미터는 프로세스 전역 캐시 — 앞 테스트가 소비한 토큰이 새지 않게 초기화
-    ratelimit.chat_limiter.cache_clear()
-    ratelimit.routine_limiter.cache_clear()
+    service.chat_limiter.cache_clear()
+    routines_service.routine_limiter.cache_clear()
     # 제목·요약 LLM은 부르지 않는다 — 폴백 경로로 떨어뜨려 Bedrock 의존을 끊는다
-    monkeypatch.setattr(llm, "complete", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(bedrock, "complete", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError()))
     return fake
 
 
@@ -131,7 +134,7 @@ def store(monkeypatch):
 def client(store):
     # TestClient를 컨텍스트 매니저로 쓰지 않는다 — lifespan이 돌면 부팅 훅이 실제 DynamoDB를
     # Scan한다(루틴 스토어 로드). 채팅 경로는 그 스토어를 쓰지 않으므로 lifespan을 건너뛴다.
-    app.dependency_overrides[deps.get_current_user_id] = lambda: USER_ID
+    app.dependency_overrides[auth_deps.get_current_user_id] = lambda: USER_ID
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -419,7 +422,7 @@ async def test_refresh_summarizes_only_unsummarized_tail(store, monkeypatch):
         captured.append(user)
         return "병합 요약"
 
-    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(bedrock, "complete", fake_complete)
     _seed_thread(store, "01TX")
     store.threads[(USER_ID, "01TX")].summary_upto = "M0005"
     store.threads[(USER_ID, "01TX")].summary_text = "이전 요약"

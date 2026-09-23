@@ -5,10 +5,15 @@ from functools import lru_cache
 import boto3
 from botocore.client import BaseClient
 from botocore.config import Config
+from langchain_aws import ChatBedrockConverse
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
+
+INFERENCE_PROFILE_PREFIXES = ("us", "eu", "apac", "global")
 
 
 @lru_cache
@@ -41,6 +46,43 @@ def chat_runtime() -> BaseClient:
             max_pool_connections=settings.executor_max_workers,
         ),
     )
+
+
+def model_provider(model_id: str) -> str:
+    """모델 아이디에서 추론 프로필 접두사 제외 프로바이더 추출"""
+    parts = model_id.split(".")
+    if parts and parts[0] in INFERENCE_PROFILE_PREFIXES:
+        parts = parts[1:]
+    return parts[0] if parts else "amazon"
+
+
+@lru_cache
+def _structured_model() -> ChatBedrockConverse:
+    """루틴 경로 구조화 출력용 채팅 모델 전역 싱글턴"""
+    settings = get_settings()
+    return ChatBedrockConverse(
+        model=settings.llm_model_id,
+        provider=model_provider(settings.llm_model_id),
+        region_name=settings.aws_region,
+        client=_runtime(),
+        max_tokens=settings.llm_max_tokens,
+        temperature=0.3,
+    )
+
+
+def structured(schema: type[BaseModel], system: str, user: str) -> BaseModel | None:
+    """스키마 강제 도구 호출로 검증된 객체 반환"""
+    model = _structured_model().with_structured_output(schema)
+    return model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+
+
+def try_structured(purpose: str, schema: type[BaseModel], system: str, user: str) -> BaseModel | None:
+    """구조화 출력 실패 시 로그 기록 후 None 반환"""
+    try:
+        return structured(schema, system, user)
+    except Exception:
+        logger.warning("%s LLM failed, falling back", purpose, exc_info=True)
+        return None
 
 
 def complete(system: str, user: str, max_tokens: int | None = None) -> str:

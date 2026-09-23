@@ -29,17 +29,18 @@ import numpy as np
 import uvicorn
 from fastapi.responses import FileResponse
 
-from app import deps
+from app.auth import deps as auth_deps
 from app.chat import repository
 from app.chat.models import ThreadRecord
 from app.exercises import repository as exercise_repository
+from app.memory import repository as memory_repository
 from app.users import repository as users_repository
 from app.workouts import repository as workouts_repository
-from app.core import llm
+from app.clients import bedrock
 from app.core.clock import iso_utc
 from app.main import app
 from app.exercises.repository import get_exercise_meta
-from app.routines import repository as routines_repository
+from app.rag import retrieve as rag_retrieve
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 NOW = datetime.now(timezone.utc)
@@ -308,7 +309,7 @@ def _install_fake_routine_store():
         ]
         return rows[:limit]
 
-    routines_repository.search = fake_search
+    rag_retrieve.search = fake_search
 
 
 # ── LLM 대체 (선택) ───────────────────────────────────────────────────
@@ -361,18 +362,19 @@ def patch_everything(fake_llm: bool):
         "list_threads", "get_thread", "put_thread", "delete_thread", "touch_thread",
         "save_summary", "messages_page", "recent_messages", "messages_after",
         "count_messages", "put_message", "delete_messages",
-        "get_user_summary", "put_user_summary",
     ):
         setattr(repository, name, getattr(chat_store, name))
+    for name in ("get_user_summary", "put_user_summary"):
+        setattr(memory_repository, name, getattr(chat_store, name))
 
     _install_fake_backend()
     _install_fake_routine_store()
 
     # 임베딩은 Cohere 모델 액세스 의존을 끊는다 — 로컬 랭킹 품질은 실험 대상 아님
     rng = np.random.default_rng(7)
-    llm.embed_query = lambda text: rng.standard_normal(1024).astype(np.float32).tolist()
+    bedrock.embed_query = lambda text: rng.standard_normal(1024).astype(np.float32).tolist()
 
-    app.dependency_overrides[deps.get_current_user_id] = lambda: USER_ID
+    app.dependency_overrides[auth_deps.get_current_user_id] = lambda: USER_ID
 
     if fake_llm:
         _install_fake_llm()
