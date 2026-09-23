@@ -1,6 +1,8 @@
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
 from app.agent.tools import failures
@@ -90,3 +92,18 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         "차트는 앱이 렌더링하므로 답변에서는 이 수치가 뜻하는 변화만 짧게 해석한다."
     )
     return summary, {"response_scheme": ResponseScheme.CHART, "payload": payload}
+
+
+class _DrawChartInput(DrawChart):
+    user_id: Annotated[str, InjectedState("user_id")]
+
+
+@tool(
+    "DrawChart",
+    args_schema=_DrawChartInput,
+    description=DrawChart.__doc__,
+    response_format="content_and_artifact",
+)
+async def draw_chart(user_id: str, **args) -> tuple[str, dict | None]:
+    """차트 도구 진입점, run 위임"""
+    return await run(user_id, args)

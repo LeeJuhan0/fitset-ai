@@ -1,6 +1,9 @@
 import asyncio
 import logging
+from typing import Annotated
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
 from app.agent.tools import failures
@@ -73,3 +76,18 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         "expiresAt": video["expiresAt"] if video else None,
     }
     return summary, {"response_scheme": ResponseScheme.EXERCISE_GIF, "payload": payload}
+
+
+class _GetExerciseGuideInput(GetExerciseGuide):
+    user_id: Annotated[str, InjectedState("user_id")]
+
+
+@tool(
+    "GetExerciseGuide",
+    args_schema=_GetExerciseGuideInput,
+    description=GetExerciseGuide.__doc__,
+    response_format="content_and_artifact",
+)
+async def get_exercise_guide(user_id: str, **args) -> tuple[str, dict | None]:
+    """종목 가이드 도구 진입점, run 위임"""
+    return await run(user_id, args)

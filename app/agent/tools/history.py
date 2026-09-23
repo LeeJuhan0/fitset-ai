@@ -1,8 +1,10 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 from sqlalchemy import Select, func, select
 
@@ -186,3 +188,18 @@ def _cell(value) -> str:
     if isinstance(value, float) or str(type(value).__name__) == "Decimal":
         return f"{float(value):g}"
     return str(value)
+
+
+class _QueryWorkoutHistoryInput(QueryWorkoutHistory):
+    user_id: Annotated[str, InjectedState("user_id")]
+
+
+@tool(
+    "QueryWorkoutHistory",
+    args_schema=_QueryWorkoutHistoryInput,
+    description=QueryWorkoutHistory.__doc__,
+    response_format="content_and_artifact",
+)
+async def query_workout_history(user_id: str, **args) -> tuple[str, dict | None]:
+    """기록 조회 도구 진입점, run 위임"""
+    return await run(user_id, args)

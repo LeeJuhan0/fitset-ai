@@ -1,6 +1,8 @@
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field
 
 from app.core.schemas import ResponseScheme
@@ -62,3 +64,18 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         "구성은 앱이 카드로 보여주므로 답변에서는 왜 이렇게 골랐는지만 짧게 설명한다."
     )
     return summary, {"response_scheme": ResponseScheme.ROUTINE, "payload": payload}
+
+
+class _RecommendRoutineInput(RecommendRoutine):
+    user_id: Annotated[str, InjectedState("user_id")]
+
+
+@tool(
+    "RecommendRoutine",
+    args_schema=_RecommendRoutineInput,
+    description=RecommendRoutine.__doc__,
+    response_format="content_and_artifact",
+)
+async def recommend_routine(user_id: str, **args) -> tuple[str, dict | None]:
+    """루틴 추천 도구 진입점, run 위임"""
+    return await run(user_id, args)

@@ -1,5 +1,4 @@
 import logging
-import operator
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
@@ -11,9 +10,10 @@ from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt import ToolNode
 
 from app.agent import guardrails, tools
-from app.core import llm
+from app.clients import bedrock
 from app.core.config import get_settings
 
 logger = logging.getLogger("fitset")
@@ -30,8 +30,6 @@ class GraphEvent(StrEnum):
 class ChatState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_id: str
-    artifacts: Annotated[list[dict], operator.add]
-    tool_turns: int
 
 
 @dataclass(frozen=True)
@@ -41,27 +39,19 @@ class AgentResult:
     payload: dict | None
 
 
-def _model_provider(model_id: str) -> str:
-    """모델 아이디에서 추론 프로필 접두사 제외 프로바이더 추출"""
-    parts = model_id.split(".")
-    if parts and parts[0] in ("us", "eu", "apac", "global"):
-        parts = parts[1:]
-    return parts[0] if parts else "amazon"
-
-
 @lru_cache
 def _model() -> Runnable:
     """툴 바인딩된 Bedrock 채팅 모델 전역 싱글턴"""
     settings = get_settings()
     model = ChatBedrockConverse(
         model=settings.llm_model_id,
-        provider=_model_provider(settings.llm_model_id),
+        provider=bedrock.model_provider(settings.llm_model_id),
         region_name=settings.aws_region,
-        client=llm.chat_runtime(),
+        client=bedrock.chat_runtime(),
         max_tokens=settings.llm_max_tokens,
         temperature=0.3,
     )
-    return model.bind_tools(tools.TOOL_SCHEMAS)
+    return model.bind_tools(tools.TOOLS)
 
 
 async def _agent_node(state: ChatState) -> dict:
@@ -70,31 +60,24 @@ async def _agent_node(state: ChatState) -> dict:
     return {"messages": [response]}
 
 
-async def _tools_node(state: ChatState) -> dict:
-    """툴콜 실행 후 툴 메시지와 아티팩트 적재"""
-    calls = getattr(state["messages"][-1], "tool_calls", []) or []
-    outputs: list[AnyMessage] = []
-    artifacts: list[dict] = []
-    for call in calls:
-        text, artifact = await tools.dispatch(state["user_id"], call["name"], call.get("args") or {})
-        outputs.append(ToolMessage(content=text, tool_call_id=call["id"]))
-        if artifact is not None:
-            artifacts.append(artifact)
-    return {
-        "messages": outputs,
-        "artifacts": artifacts,
-        "tool_turns": state.get("tool_turns", 0) + 1,
-    }
+def tool_node() -> ToolNode:
+    """툴 실행 노드, 유저 아이디 주입과 실패 문구 변환"""
+    return ToolNode(tools.TOOLS, handle_tool_errors=tools.tool_error_message)
+
+
+def _tool_turns(messages: list[AnyMessage]) -> int:
+    """이번 턴 툴콜 요청 횟수"""
+    return sum(1 for message in messages if getattr(message, "tool_calls", None))
 
 
 def _route(state: ChatState) -> str:
     """툴콜 유무와 왕복 상한으로 다음 노드 결정"""
-    if state.get("tool_turns", 0) >= get_settings().agent_max_tool_turns:
+    if not getattr(state["messages"][-1], "tool_calls", None):
+        return END
+    if _tool_turns(state["messages"]) > get_settings().agent_max_tool_turns:
         logger.warning("tool turn limit reached, ending turn")
         return END
-    if getattr(state["messages"][-1], "tool_calls", None):
-        return TOOLS_NODE
-    return END
+    return TOOLS_NODE
 
 
 @lru_cache
@@ -102,7 +85,7 @@ def _graph() -> CompiledStateGraph:
     """에이전트 툴 루프 그래프 컴파일 전역 재사용"""
     builder = StateGraph(ChatState)
     builder.add_node(AGENT_NODE, _agent_node)
-    builder.add_node(TOOLS_NODE, _tools_node)
+    builder.add_node(TOOLS_NODE, tool_node())
     builder.add_edge(START, AGENT_NODE)
     builder.add_conditional_edges(AGENT_NODE, _route, {TOOLS_NODE: TOOLS_NODE, END: END})
     builder.add_edge(TOOLS_NODE, AGENT_NODE)
@@ -139,9 +122,15 @@ def _initial_state(user_id: str, system_prompt: str, history: list[AnyMessage]) 
     return {
         "messages": [SystemMessage(content=system_prompt), *history],
         "user_id": user_id,
-        "artifacts": [],
-        "tool_turns": 0,
     }
+
+
+def _last_artifact(messages: list[AnyMessage]) -> dict:
+    """마지막 툴 메시지 아티팩트, 없으면 빈 dict"""
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage) and message.artifact:
+            return message.artifact
+    return {}
 
 
 def _finalize(state: dict) -> AgentResult:
@@ -152,8 +141,7 @@ def _finalize(state: dict) -> AgentResult:
             content = _text_of(message)
             break
 
-    artifacts = state.get("artifacts") or []
-    artifact = artifacts[-1] if artifacts else {}
+    artifact = _last_artifact(state.get("messages", []))
     scheme, payload = guardrails.enforce_scheme_contract(
         artifact.get("response_scheme"), artifact.get("payload")
     )
