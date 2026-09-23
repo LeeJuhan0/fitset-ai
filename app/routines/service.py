@@ -7,7 +7,7 @@ from app.core.ratelimit import RateLimiter
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, RateLimitedError
 from app.exercises import repository as exercise_catalog
-from app.rag import query, search
+from app.rag import pipeline, query
 from app.rag.retrieve import SearchFilters
 from app.routines import utils
 from app.routines.exceptions import NoRoutineCandidateError, UnsafeConstraintError
@@ -63,7 +63,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         muscle_groups=request.muscle_groups, avoided=avoided, level=request.level,
         minutes=request.minutes, tolerance=settings.minutes_tolerance, home_only=home_only,
     )
-    chosen = await search.find_routine(query_description, filters, parsed)
+    chosen = await pipeline.find_routine(query_description, filters, parsed)
     if chosen is None:
         raise NoRoutineCandidateError()
     routine = chosen["body"]
