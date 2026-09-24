@@ -23,7 +23,7 @@ class WorkoutHistoryExercise(BackendBase):
     id: Mapped[bytes] = mapped_column(BINARY(16), primary_key=True)
     workout_history_id: Mapped[bytes] = mapped_column(ForeignKey("workout_history.id"))
     exercise_id: Mapped[bytes] = mapped_column(ForeignKey("exercise.id"))
-    order_index: Mapped[int] = mapped_column(Integer)
+    order_index: Mapped[int] = mapped_column("sort_order", Integer)
 
 
 class WorkoutHistorySet(BackendBase):
@@ -31,7 +31,7 @@ class WorkoutHistorySet(BackendBase):
 
     id: Mapped[bytes] = mapped_column(BINARY(16), primary_key=True)
     workout_exercise_history_id: Mapped[bytes] = mapped_column(ForeignKey("workout_exercise_history.id"))
-    order_index: Mapped[int] = mapped_column(Integer)
+    order_index: Mapped[int] = mapped_column("sort_order", Integer)
     duration_seconds: Mapped[int] = mapped_column("duration", Integer)
     rest_seconds: Mapped[int] = mapped_column("rest", Integer)
     weight: Mapped[Decimal] = mapped_column(Numeric(6, 2))
