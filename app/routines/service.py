@@ -49,8 +49,8 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         logger.warning("guardrail blocked recommendation: %s", unsafe_constraints)
         raise UnsafeConstraintError()
 
-    meta = exercise_catalog.get_exercise_meta()
-    stats = utils.build_e1rm_stats(workouts, meta)
+    meta = exercise_catalog.get_exercise_catalog()
+    stats = utils.build_e1rm_stats(workouts)
     ratio = utils.bodyweight_ratio(workouts, meta)
     home_only = ratio is not None and ratio >= settings.bodyweight_home_ratio
 
@@ -68,7 +68,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
         raise NoRoutineCandidateError()
     routine = chosen["body"]
 
-    return _build_response(routine, request, profile, stats, meta)
+    return _build_response(routine, request, stats, meta)
 
 
 def _build_set(
@@ -76,8 +76,7 @@ def _build_set(
     set_template: dict,
     kind: str | None,
     level: str,
-    stats: tuple[dict, dict],
-    profile: dict,
+    stats: dict[str, float],
     meta: dict,
 ) -> RoutineSetOut:
     """종목 수행 방식별 세트 무게 렙 시간 조립"""
@@ -96,15 +95,14 @@ def _build_set(
     if kind == "REPS_ONLY":
         return RoutineSetOut(order_index=order_index, weight=0, reps=reps, duration_seconds=0)
 
-    weight = utils.recommend_weight(slug, reps, stats, profile, meta) or 0
+    weight = utils.recommend_weight(slug, reps, stats, meta) or 0
     return RoutineSetOut(order_index=order_index, weight=weight, reps=reps, duration_seconds=0)
 
 
 def _build_response(
     routine: dict,
     request: RoutineGenerateRequest,
-    profile: dict,
-    stats: tuple[dict, dict],
+    stats: dict[str, float],
     meta: dict,
 ) -> RoutineOut:
     """선택 루틴을 무게 추천 포함 응답 스키마로 변환"""
@@ -115,7 +113,7 @@ def _build_response(
         equipment = (meta.get(slug) or {}).get("equipment", [])
         kind = exercise_catalog.exercise_type(slug)
         sets = [
-            _build_set(slug, set_template, kind, request.level, stats, profile, meta)
+            _build_set(slug, set_template, kind, request.level, stats, meta)
             for set_template in exercise.get("sets", [])
         ]
         if request.include_warmup and sets:

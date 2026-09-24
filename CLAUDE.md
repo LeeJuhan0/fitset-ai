@@ -69,14 +69,14 @@
 **대상**: 클라이언트 API §1 AI 루틴 생성(`POST /ai/v1/routines`) + 유저 데이터 조회(프로필·운동기록·종목 — 조회 경로는 위 「유저 데이터 조회」 섹션).
 **스택**: FastAPI + uvicorn(WAS), LangGraph/LangChain, **Bedrock**(LLM·임베딩), DynamoDB(PynamoDB ODM — 모델은 각 models.py, boto3 직접 호출 금지).
 **LLM: Amazon Nova 2 Lite(`global.amazon.nova-2-lite-v1:0`, $0.30/$2.50)** — 2026-07-29 비용 절감 확정(Haiku 4.5 대비 입력 1/3.3·출력 1/2). **반드시 global 프로필** — 1세대 Nova는 apac 프로필 강제인데 조직 SCP가 APAC 리전을 차단해 사용 불가(실측), global 라우팅만 SCP를 통과한다. 품질 문제 시 `LLM_MODEL_ID=global.anthropic.claude-haiku-4-5-20251001-v1:0`으로 즉시 롤백. 챗봇·루틴·제목·요약이 모델 하나를 공유한다(Converse API라 모델 무관 구조).
-**임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 `scripts/embed_routines.py --force` 전량 재계산 필수(임베딩 공간 호환 안 됨).
+**임베딩 모델 고정: `global.cohere.embed-v4:0`** (다국어, 1024d float32, `input_type` 문서=`search_document`/쿼리=`search_query`) — 서울 리전은 global inference profile로만 호출 가능. 모델 변경 시 전량 재임베딩 필수(임베딩 공간 호환 안 됨). 서비스는 Postgres만 조회한다. pgvector `routines` 스키마 정본은 `app/routines/models.py`, 변경은 Alembic(`alembic/versions/`, `poetry run alembic upgrade head`)으로만 한다. 적재는 repo 밖에서 관리한다.
 호출 주체는 앱 클라이언트. 네트워크 인프라는 Terraform으로 별도 진행(범위 밖).
 
 루틴 생성 요청 처리 플로우:
 
 1. **인증**: `Authorization: Bearer` → SSM 공개키(RS256)로 검증 → `sub` = userId (위 인증 절차 참조)
 2. **유저 컨텍스트**: 프로필(기피부위·수준·**목표**) 먼저 조회 — **goal은 요청이 아니라 프로필 값**(2026-07-29 확정, null이면 hypertrophy 기본). 이어서 최근 운동기록 조회와 **6의 쿼리 변환 LLM을 병렬 실행** (변환이 goal에 의존하게 되어 프로필만 직렬화, 변환 LLM ~1초와의 병렬성은 유지)
-3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (Epley e1RM 3계층 폴백: 실측 → 주동근 유추×0.8 → 성별·체중×레벨 계수×목표 계수)
+3. **기록 통계**: 선호 운동·평소 강도(종목별 무게) 정립 → 세트 `weight` 추천값 산출 — 규칙은 [`docs/무게 추천.md`](docs/무게%20추천.md) (해당 종목 실측 Epley e1RM, 기록 없으면 0kg. 2026-09-24 유추·프로필 기준선 폐기)
 4. **조건 결합**: 요청(level·muscleGroups·minutes·context) + 프로필 goal 기반 필터 조건 구성, 프로필 기피부위는 항상 하드 필터 — 기피(제외) 정보는 요청이 아닌 **프로필 조회값**(`null` 가능, 비즈니스 규칙 §5 "제외 운동" 흡수). 응답 최상위 베이스 루틴 참조 필드명은 **`slug`** (routineUrl 아님, 2026-07-25 통일)
 5. **후보 생성**: Postgres(pgvector) `routines`에 **룰 필터 5개를 WHERE 절로**(`rag/retrieve.search_statement`, 2026-08-28 전환, 파이프라인은 `app/rag/`). 응답 조립에 쓰는 세트 상세는 같은 행의 `body` JSONB라 추가 조회가 없다. 룰 필터 확정 규칙 (2026-07-25):
    - **부위(muscleGroups)**: 요청 부위와 루틴 `muscle_groups`의 **교집합이 있으면 통과** (`∩ ≠ ∅`)
@@ -146,8 +146,7 @@
 
 ### 운동명 (EXERCISE, slug ↔ 한글명 206종)
 
-종목 식별은 **이중 체계**다 (2026-08-05 개정). AI 서버 내부·서버 간 참조는 **slug**, 클라가 백엔드 공개 API(루틴 저장·종목 상세)를 부를 때 쓰는 **백엔드 마스터 UUID는 `exerciseId`** — 클라로 나가는 payload에 둘 다 싣는다. UUID·CDN 썸네일·영상 URL의 정본은 백엔드 마스터뿐이라 **일 1회 배치(`scripts/sync_exercise_catalog.py`)가 공개 API `GET /api/v1/exercises`를 DynamoDB `exercise_catalog`(PK=slug)로 캐시**하고, 서버는 첫 조회 때 Scan해 인메모리로 든다(206종 1:1 조인 확인). 캐시가 비어도 서버는 돈다 — `exerciseId`는 null. 영상 폴백이던 내부 API §4.3 `videoUrl`은 내부 API 파기(2026-08-12)로 소멸 — ERD상 exercise 테이블에도 video_url 컬럼이 없어져 **카탈로그 캐시가 영상 URL의 유일 출처**(비면 영상 없음으로 강등, 2026-08-06 presign 폐기는 유지). 이름은 **한글명**(metadata `name_ko`).
-정본 파일: `~/Downloads/metadata.ko (1).json` (영문 metadata.json + `*_ko` 한글 필드 확장판, slug 동일).
+종목 식별은 **이중 체계**다 (2026-08-05 개정). AI 서버 내부·서버 간 참조는 **slug**, 클라가 백엔드 공개 API(루틴 저장·종목 상세)를 부를 때 쓰는 **백엔드 마스터 UUID는 `exerciseId`** — 클라로 나가는 payload에 둘 다 싣는다. UUID·`exerciseType`·CDN 썸네일·영상 URL의 정본은 백엔드 마스터뿐이라 **MySQL `exercise` 테이블을 직조회**해 인메모리로 든다(2026-09-21 개정, DynamoDB `exercise_catalog`와 일 1회 동기화 배치 폐기). URL은 `thumbnail_key`·`video_key`에 `MEDIA_CDN_BASE_URL`을 붙여 조립한다. MySQL 미설정·조회 실패 시에도 서버는 돈다 — `exerciseId`는 null, 영상 없음으로 강등하고 실패는 캐시하지 않아 복구 후 다시 읽는다. 한글명·장비·주동근·보조근도 같은 조회에서 `exercise`·`equipment`·`exercise_muscle`로 든다(2026-09-24, repo 동봉 metadata JSON 폐기). 이름은 **한글명**(`exercise.name`).
 
 slug는 대체로 `{장비}-{동작}` 패턴이지만 **영문명 slugify와 일치하지 않는 예외**가 있으므로 이름에서 slug를 기계적으로 역산하지 말 것:
 

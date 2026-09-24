@@ -1,4 +1,4 @@
-"""루틴 도메인 순수 로직 테스트 — 룰 필터·무게 추천(3계층)·기록 통계."""
+"""루틴 도메인 순수 로직 테스트 — 룰 필터·무게 추천(실측 기록)·기록 통계."""
 import pytest
 
 from app.routines import utils
@@ -8,73 +8,61 @@ META = {
         "slug": "barbell-bench-press",
         "primaryMuscles": ["Chest"],
         "equipment": ["Barbell"],
-        "movementPattern": ["Push"],
     },
     "push-up": {
         "slug": "push-up",
         "primaryMuscles": ["Chest"],
         "equipment": ["Bodyweight"],
-        "movementPattern": ["Push"],
     },
     "barbell-overhead-press": {
         "slug": "barbell-overhead-press",
         "primaryMuscles": ["Shoulders"],
         "equipment": ["Barbell"],
-        "movementPattern": ["Push"],
     },
     "dumbbell-bench-press": {
         "slug": "dumbbell-bench-press",
         "primaryMuscles": ["Chest"],
         "equipment": ["Dumbbell"],
-        "movementPattern": ["Push"],
     },
     "dumbbell-incline-bench-press": {
         "slug": "dumbbell-incline-bench-press",
         "primaryMuscles": ["Chest"],
         "equipment": ["Dumbbell"],
-        "movementPattern": ["Push"],
     },
     "machine-underhand-row": {
         "slug": "machine-underhand-row",
         "primaryMuscles": ["Biceps"],
         "equipment": ["Machine"],
-        "movementPattern": ["Pull"],
     },
     "dumbbell-curl": {
         "slug": "dumbbell-curl",
         "primaryMuscles": ["Biceps"],
         "equipment": ["Dumbbell"],
-        "movementPattern": ["Isolation"],
     },
     "barbell-curl": {
         "slug": "barbell-curl",
         "primaryMuscles": ["Biceps"],
         "equipment": ["Barbell"],
-        "movementPattern": ["Isolation"],
     },
     "ez-bar-preacher-curl": {
         "slug": "ez-bar-preacher-curl",
         "primaryMuscles": ["Biceps"],
         "equipment": ["Barbell"],
-        "movementPattern": ["Isolation"],
     },
     "dumbbell-lateral-raise": {
         "slug": "dumbbell-lateral-raise",
         "primaryMuscles": ["Shoulders"],
         "equipment": ["Dumbbell"],
-        "movementPattern": ["Isolation"],
     },
     "machine-chest-press": {
         "slug": "machine-chest-press",
         "primaryMuscles": ["Chest"],
         "equipment": ["Machine"],
-        "movementPattern": ["Push"],
     },
     "kettlebell-floor-press": {
         "slug": "kettlebell-floor-press",
         "primaryMuscles": ["Chest"],
         "equipment": ["Kettlebell"],
-        "movementPattern": ["Push"],
     },
 }
 
@@ -107,67 +95,22 @@ def _workouts_with(weight, reps, slug="barbell-bench-press"):
     return [{"exercises": [{"slug": slug, "sets": [{"weight": weight, "reps": reps}]}]}]
 
 
-def test_recommend_weight_tier_a_from_history():
+def test_recommend_weight_from_history():
     # 60kg × 10렙 → e1RM 80 → 5렙 목표 = 80/(1+5/30) ≈ 68.6 → 바벨 5 단위 = 70
-    stats = utils.build_e1rm_stats(_workouts_with(60, 10), META)
-    weight = utils.recommend_weight("barbell-bench-press", 5, stats, {}, META)
-    assert weight == 70.0
+    stats = utils.build_e1rm_stats(_workouts_with(60, 10))
+    assert utils.recommend_weight("barbell-bench-press", 5, stats, META) == 70.0
 
 
-def test_recommend_weight_tier_b_same_muscle_pattern_equipment():
-    # 덤벨 벤치 기록 → 같은 주동근·패턴·장비인 덤벨 인클라인 벤치로 전이. e1RM × 0.8
-    stats = utils.build_e1rm_stats(_workouts_with(20, 10, "dumbbell-bench-press"), META)
-    weight = utils.recommend_weight("dumbbell-incline-bench-press", 10, stats, {}, META)
-    expected = utils.weight_for_reps(utils.epley_e1rm(20, 10) * 0.8, 10)
-    assert weight == pytest.approx(round(expected / 2) * 2)
-
-
-def test_recommend_weight_no_transfer_across_equipment():
-    # 바벨 벤치 기록은 덤벨 벤치로 넘어가지 않는다 — 양손 무게가 한 손 무게로 둔갑하던 경로
-    stats = utils.build_e1rm_stats(_workouts_with(60, 10), META)
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    weight = utils.recommend_weight("dumbbell-bench-press", 10, stats, profile, META)
-    baseline = utils.baseline_e1rm(META["dumbbell-bench-press"], profile)
-    assert weight == pytest.approx(round(utils.weight_for_reps(baseline, 10) / 2) * 2)
-
-
-def test_recommend_weight_no_transfer_compound_to_isolation():
-    # 머신 언더핸드 로우(이두 주동)의 무게가 덤벨 컬로 흘러들지 않는다 — 실기기 검증 26건의 원인
-    stats = utils.build_e1rm_stats(_workouts_with(90, 8, "machine-underhand-row"), META)
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    weight = utils.recommend_weight("dumbbell-curl", 10, stats, profile, META)
-    assert weight is not None and weight <= 10
-
-
-def test_recommend_weight_tier_b_capped_by_baseline_multiple():
-    # 같은 키라도 전이값이 과하면 초기 추정의 3배에서 잘린다
-    stats = utils.build_e1rm_stats(_workouts_with(200, 5, "dumbbell-bench-press"), META)
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    weight = utils.recommend_weight("dumbbell-incline-bench-press", 10, stats, profile, META)
-    cap = utils.baseline_e1rm(META["dumbbell-incline-bench-press"], profile) * utils.E1RM_CAP_MULTIPLE
-    assert weight == pytest.approx(round(utils.weight_for_reps(cap, 10) / 2) * 2)
-
-
-def test_recommend_weight_tier_a_not_capped():
-    # 실측은 상한을 받지 않는다 — 유저가 실제로 든 무게라 초기 추정보다 커도 그대로 쓴다
-    stats = utils.build_e1rm_stats(_workouts_with(120, 5), META)
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    weight = utils.recommend_weight("barbell-bench-press", 5, stats, profile, META)
-    assert weight == pytest.approx(120.0)
-
-
-def test_recommend_weight_tier_c_profile_based():
-    # 기록 전무 남성 70kg intermediate strength — 수직 푸시 0.25 × 1.3 × 1.1
-    stats = ({}, {})
-    profile = {"gender": "MALE", "weightKg": 70, "level": "intermediate", "goal": "strength"}
-    weight = utils.recommend_weight("barbell-overhead-press", 8, stats, profile, META)
-    expected_e1rm = 70 * utils.PATTERN_RATIO["push_vertical"][0] * 1.3 * 1.1
-    expected = round(utils.weight_for_reps(expected_e1rm, 8) / 5) * 5
-    assert weight == expected
+def test_recommend_weight_without_history_is_none():
+    # 다른 종목 기록은 빌려오지 않는다 — 기록 없는 종목은 0kg 로 내려간다
+    stats = utils.build_e1rm_stats(_workouts_with(20, 10, "dumbbell-bench-press"))
+    assert utils.recommend_weight("dumbbell-incline-bench-press", 10, stats, META) is None
+    assert utils.recommend_weight("barbell-bench-press", 10, {}, META) is None
 
 
 def test_recommend_weight_bodyweight_is_none():
-    assert utils.recommend_weight("push-up", 15, ({}, {}), {}, META) is None
+    stats = utils.build_e1rm_stats(_workouts_with(10, 10, "push-up"))
+    assert utils.recommend_weight("push-up", 15, stats, META) is None
 
 
 def test_e1rm_stats_skip_zero_weight_and_high_reps():
@@ -175,9 +118,7 @@ def test_e1rm_stats_skip_zero_weight_and_high_reps():
         {"weight": 0, "reps": 10},     # 맨몸/미기록 인코딩 — 제외
         {"weight": 60, "reps": 20},    # 12렙 초과 — Epley 오차로 제외
     ]}]}]
-    by_slug, by_transfer = utils.build_e1rm_stats(workouts, META)
-    assert by_slug == {}
-    assert by_transfer == {}
+    assert utils.build_e1rm_stats(workouts) == {}
 
 
 def test_warmup_weight_half():
@@ -192,38 +133,7 @@ def test_warmup_weight_not_below_bar():
 
 def test_recommend_weight_not_below_bar():
     # 바벨 종목은 봉 무게 아래로 내려가지 않는다. EZ바는 봉이 가벼워 따로 본다
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    assert utils.recommend_weight("barbell-curl", 10, ({}, {}), profile, META) == 20.0
-    assert utils.recommend_weight("ez-bar-preacher-curl", 10, ({}, {}), profile, META) == 15.0
-
-
-def test_baseline_applies_equipment_factor_then_halves_per_hand():
-    # 같은 패턴이어도 장비별 부하 계수를 곱하고, 한 손 표기 장비만 다시 절반으로 나눈다
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    barbell = utils.baseline_e1rm(META["barbell-bench-press"], profile)
-    dumbbell = utils.baseline_e1rm(META["dumbbell-bench-press"], profile)
-    kettlebell = utils.baseline_e1rm(META["kettlebell-floor-press"], profile)
-    machine = utils.baseline_e1rm(META["machine-chest-press"], profile)
-    assert dumbbell == pytest.approx(barbell * 0.85 / 2)
-    assert kettlebell == pytest.approx(barbell * 0.80 / 2)
-    assert machine == pytest.approx(barbell * 1.15)
-
-
-def test_free_weight_total_load_below_barbell():
-    # 좌우를 따로 잡는 부담만큼 프리웨이트 양손 합이 바벨보다 낮아야 한다
-    profile = {"gender": "MALE", "weightKg": 80, "level": "beginner", "goal": "hypertrophy"}
-    barbell = utils.recommend_weight("barbell-bench-press", 10, ({}, {}), profile, META)
-    dumbbell = utils.recommend_weight("dumbbell-bench-press", 10, ({}, {}), profile, META)
-    machine = utils.recommend_weight("machine-chest-press", 10, ({}, {}), profile, META)
-    assert dumbbell * 2 < barbell
-    assert machine > barbell
-
-
-def test_small_muscle_isolation_stays_light():
-    # 레이즈 계열이 컬과 같은 비율을 받으면 초급에게 과해진다 — 주동근으로 그룹을 가른다
-    assert utils.pattern_group(META["dumbbell-lateral-raise"]) == "isolation_small"
-    assert utils.pattern_group(META["dumbbell-curl"]) == "isolation"
-    profile = {"gender": "MALE", "weightKg": 70, "level": "beginner", "goal": "hypertrophy"}
-    raise_weight = utils.recommend_weight("dumbbell-lateral-raise", 10, ({}, {}), profile, META)
-    curl_weight = utils.recommend_weight("dumbbell-curl", 10, ({}, {}), profile, META)
-    assert raise_weight < curl_weight
+    workouts = _workouts_with(10, 10, "barbell-curl") + _workouts_with(10, 10, "ez-bar-preacher-curl")
+    stats = utils.build_e1rm_stats(workouts)
+    assert utils.recommend_weight("barbell-curl", 10, stats, META) == 20.0
+    assert utils.recommend_weight("ez-bar-preacher-curl", 10, stats, META) == 10.0

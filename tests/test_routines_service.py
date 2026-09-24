@@ -52,7 +52,7 @@ def wired(monkeypatch):
         return "chest routine", {"shoulders"}, []
 
     monkeypatch.setattr(query, "analyze", analyze)
-    monkeypatch.setattr(service, "_build_response", lambda routine, request, profile, stats, meta: routine["slug"])
+    monkeypatch.setattr(service, "_build_response", lambda routine, request, stats, meta: routine["slug"])
 
     def search(filters, query_vector, limit):
         calls["search"].append(filters)
