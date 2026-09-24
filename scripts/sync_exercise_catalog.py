@@ -30,14 +30,14 @@ from app.exercises.models import CatalogEntry  # noqa: E402
 
 
 def fetch_backend_catalog(url: str, timeout: float) -> dict[str, dict]:
-    """백엔드 공개 API → slug 키 딕셔너리. 응답 봉투({traceId, data.items})를 벗긴다.
+    """백엔드 공개 API → slug 키 딕셔너리. 응답은 봉투 없는 {items}(fitset-api #169).
 
     2026-08-25 응답에서 slug 필드가 빠짐(백엔드 #96) — thumbnailUrl 파일명이 slug와
     동일함을 확인해(thumbnails/{slug}.webp) 거기서 유도한다.
     """
     response = httpx.get(url, timeout=timeout)
     response.raise_for_status()
-    items = response.json()["data"]["items"]
+    items = response.json()["items"]
     catalog = {}
     for item in items:
         slug = item.get("slug") or _slug_from_url(item.get("thumbnailUrl"))

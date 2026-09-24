@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.core import dynamo  # noqa: E402
 from app.exercises import repository  # noqa: E402
 from app.exercises.models import CatalogEntry  # noqa: E402
-from scripts.sync_exercise_catalog import build_items, put_items  # noqa: E402
+import httpx  # noqa: E402
+
+from scripts.sync_exercise_catalog import build_items, fetch_backend_catalog, put_items  # noqa: E402
 
 BACKEND_SAMPLE = {
     "barbell-bench-press": {
@@ -72,6 +74,15 @@ def test_build_items_keeps_only_joined_slugs():
     assert items[0]["exercise_id"] == "11f18f47-0001-0000-8072-021f94ad3563"
     assert items[1]["video_url"] is None   # 영상 미등록 — 종목 마스터 videoUrl 폴백 대상
 
+
+def test_fetch_backend_catalog_reads_unwrapped_items(monkeypatch):
+    # 백엔드는 응답 봉투 없이 {"items": [...]} 를 준다 — slug 가 빠진 항목은 썸네일 파일명에서 유도
+    body = {"items": [{"id": "11f18f47-0001-0000-8072-021f94ad3563",
+                       "thumbnailUrl": "https://cdn.example/thumbnails/barbell-bench-press.webp"}]}
+    request = httpx.Request("GET", "https://api.test/api/v1/exercises")
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: httpx.Response(200, json=body, request=request))
+    catalog = fetch_backend_catalog("https://api.test/api/v1/exercises", 1.0)
+    assert catalog["barbell-bench-press"]["id"] == "11f18f47-0001-0000-8072-021f94ad3563"
 
 def test_catalog_lookup_returns_uuid_and_cdn_urls(catalog_table):
     put_items(build_items(BACKEND_SAMPLE, {"barbell-bench-press"}))
