@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine, insert, text
 from sqlalchemy.engine import make_url
 
@@ -21,7 +23,7 @@ from app.routines.models import Routine
 DSN = os.environ.get("PG_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="PG_TEST_DSN 미설정")
 
-DDL = Path(__file__).resolve().parents[1] / "scripts" / "sql" / "routines_pgvector.sql"
+ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 DIM = 1024
 
 
@@ -55,11 +57,11 @@ ROWS = [
 def seeded():
     engine = create_engine(DSN)
     with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS routines"))
-        ddl = "\n".join(line for line in DDL.read_text().splitlines() if not line.lstrip().startswith("--"))
-        for statement in ddl.split(";"):
-            if statement.strip():
-                conn.execute(text(statement))
+        conn.execute(text("DROP TABLE IF EXISTS routines, alembic_version"))
+    config = Config(ALEMBIC_INI)
+    config.set_main_option("sqlalchemy.url", DSN)
+    command.upgrade(config, "head")
+    with engine.begin() as conn:
         for slug, level, minutes, muscles, equipment, bodyweight_only, embedding in ROWS:
             conn.execute(
                 text("""
