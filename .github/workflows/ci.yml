@@ -31,13 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
         with:
-          enable-cache: true
+          python-version: "3.12"
 
-      - name: Install dependencies (uv.lock 고정 버전)
-        run: uv sync --frozen
+      - name: Install dependencies (poetry.lock 고정 버전)
+        run: |
+          pip install "poetry==2.5.1"
+          poetry install --no-interaction
 
       - name: Run tests
-        run: uv run pytest
+        run: poetry run pytest
