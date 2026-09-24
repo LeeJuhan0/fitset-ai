@@ -1,31 +1,76 @@
-import json
 import logging
 import re
 from functools import lru_cache
-from pathlib import Path
 
 from sqlalchemy import select
 
 from app.clients import mysql
 from app.core.config import get_settings
-from app.exercises.models import CatalogEntry, Equipment, Exercise, ExerciseMuscle, Muscle
+from app.core.exceptions import DomainError
+from app.exercises.models import Equipment, Exercise, ExerciseMuscle, Muscle
 from app.exercises.exceptions import ExerciseNotFoundError
 
 logger = logging.getLogger("fitset")
 
 
+def _media_url(key: str | None) -> str | None:
+    """미디어 키에 CDN 도메인 결합 URL 조립"""
+    if not key:
+        return None
+    return f"{get_settings().media_cdn_base_url.rstrip('/')}/{key}"
+
+
+def _title(slug: str) -> str:
+    """kebab slug 를 공백 구분 타이틀 표기로 변환"""
+    return slug.replace("-", " ").title()
+
+
 @lru_cache
+def _load_catalog() -> dict[str, dict]:
+    """종목 마스터 장비 근육 MySQL 전량 조회 후 slug 색인 캐시"""
+    rows = mysql.fetch_all(
+        select(
+            Exercise.id, Exercise.slug, Exercise.name, Exercise.exercise_type,
+            Exercise.thumbnail_key, Exercise.video_key, Equipment.slug.label("equipment"),
+        ).outerjoin(Equipment, Equipment.id == Exercise.equipment_id)
+    )
+    muscles = mysql.fetch_all(
+        select(ExerciseMuscle.exercise_id, ExerciseMuscle.role, Muscle.slug)
+        .join(Muscle, Muscle.id == ExerciseMuscle.muscle_id)
+        .order_by(Muscle.slug)
+    )
+    by_id = {
+        row["id"]: {
+            "slug": row["slug"],
+            "name_ko": row["name"],
+            "exercise_id": mysql.uuid_str(row["id"]),
+            "exercise_type": row["exercise_type"],
+            "thumbnail_url": _media_url(row["thumbnail_key"]),
+            "video_url": _media_url(row["video_key"]),
+            "equipment": [_title(row["equipment"])] if row["equipment"] else [],
+            "primaryMuscles": [],
+            "secondaryMuscles": [],
+        }
+        for row in rows
+    }
+    for muscle in muscles:
+        entry = by_id.get(muscle["exercise_id"])
+        if entry is None:
+            continue
+        key = "primaryMuscles" if muscle["role"] == "PRIMARY" else "secondaryMuscles"
+        entry[key].append(_title(muscle["slug"]))
+    return {entry["slug"]: entry for entry in by_id.values()}
+
+
 def get_exercise_catalog() -> dict[str, dict]:
-    """종목 카탈로그 DynamoDB 스캔 후 인메모리 캐시"""
-    catalog: dict[str, dict] = {}
-    try:
-        for entry in CatalogEntry.scan():
-            catalog[entry.slug] = entry.to_entry()
-    except Exception:
-        logger.exception("exercise catalog load failed, degrading to metadata-only")
+    """종목 카탈로그 조회 실패 시 빈 값 강등"""
+    if not mysql.is_configured():
         return {}
-    logger.info("exercise catalog loaded: %d entries", len(catalog))
-    return catalog
+    try:
+        return _load_catalog()
+    except DomainError:
+        logger.exception("exercise catalog load failed, degrading to empty")
+        return {}
 
 
 def exercise_id(slug: str) -> str | None:
@@ -48,29 +93,17 @@ def cdn_thumbnail_url(slug: str) -> str | None:
     return (get_exercise_catalog().get(slug) or {}).get("thumbnail_url")
 
 
-@lru_cache
-def get_exercise_meta() -> dict[str, dict]:
-    """동봉 종목 마스터 JSON 로드 후 slug 색인 캐시"""
-    path = Path(get_settings().exercise_metadata_path)
-    entries = json.loads(path.read_text())
-    return {entry["slug"]: entry for entry in entries}
-
-
 def _normalize(text: str) -> str:
     """공백 하이픈 대소문자 제거 비교용 정규화"""
     return re.sub(r"[\s\-_]+", "", text).lower()
 
 
-@lru_cache
 def _name_index() -> dict[str, str]:
-    """정규화된 종목명과 slug 색인 캐시 생성"""
+    """정규화된 종목명과 slug 색인 생성"""
     index: dict[str, str] = {}
-    for slug, entry in get_exercise_meta().items():
+    for slug, entry in get_exercise_catalog().items():
         index[_normalize(slug)] = slug
-        for key in ("name_ko", "name"):
-            value = entry.get(key)
-            if value:
-                index.setdefault(_normalize(value), slug)
+        index.setdefault(_normalize(entry["name_ko"]), slug)
     return index
 
 
@@ -97,10 +130,7 @@ def suggest_exercises(value: str, limit: int = 5) -> list[str]:
 
 def exercise_name(slug: str) -> str | None:
     """종목 slug 기준 한글 종목명 조회"""
-    entry = get_exercise_meta().get(slug)
-    if entry is None:
-        return None
-    return entry.get("name_ko") or entry.get("name")
+    return (get_exercise_catalog().get(slug) or {}).get("name_ko")
 
 
 def _instruction_steps(raw) -> list[str]:

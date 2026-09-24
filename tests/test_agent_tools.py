@@ -75,7 +75,25 @@ async def test_tool_node_injects_user_id_from_state(monkeypatch):
     assert "user_id" not in chart.draw_chart.tool_call_schema.model_json_schema()["properties"]
 
 
-def test_suggest_exercises_partial_korean_name():
+CATALOG = {
+    slug: {"slug": slug, "name_ko": name}
+    for slug, name in [
+        ("barbell-squat", "바벨 스쿼트"),
+        ("goblet-squat", "고블릿 스쿼트"),
+        ("barbell-bench-press", "바벨 벤치프레스"),
+        ("dumbbell-bench-press", "덤벨 벤치프레스"),
+    ]
+}
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    from app.exercises import repository as exercise_catalog
+
+    monkeypatch.setattr(exercise_catalog, "get_exercise_catalog", lambda: CATALOG)
+
+
+def test_suggest_exercises_partial_korean_name(catalog):
     # Nova 실측 — 작은 모델은 "스쿼트"처럼 부분 이름을 넘긴다. 후보가 나와야 한 왕복에 복구된다
     from app.exercises import repository as exercise_catalog
 
@@ -85,7 +103,7 @@ def test_suggest_exercises_partial_korean_name():
     assert exercise_catalog.suggest_exercises("존재하지않는운동종목") == []
 
 
-async def test_chart_unresolved_exercise_returns_hints_not_empty_data(monkeypatch):
+async def test_chart_unresolved_exercise_returns_hints_not_empty_data(catalog):
     from app.agent.tools import chart
 
     text, artifact = await chart.run(USER_ID, {"metric": "exercisePr", "exercise": "벤치프레스"})

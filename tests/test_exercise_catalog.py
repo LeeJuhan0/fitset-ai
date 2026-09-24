@@ -1,113 +1,76 @@
-"""종목 카탈로그 저장소·동기화 배치 테스트 — 백엔드 마스터 캐시(2026-08-05 신설).
+"""종목 카탈로그 저장소 테스트 — 백엔드 종목 마스터 MySQL 직조회 캐시.
 
-카탈로그는 있으면 좋고 없어도 서버가 도는 보조 데이터다. 조회 실패·미적재가
-부팅이나 요청을 깨뜨리지 않고 폴백(exerciseId null, 종목 마스터 videoUrl)으로 강등되는지 본다.
+카탈로그는 있으면 좋고 없어도 서버가 도는 보조 데이터다. 조회 실패·미설정이
+부팅이나 요청을 깨뜨리지 않고 폴백(exerciseId null, 영상 없음)으로 강등되는지 본다.
 """
 import sys
+import uuid
 from pathlib import Path
 
-import boto3
 import pytest
-from moto import mock_aws
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core import dynamo  # noqa: E402
+from app.clients import mysql  # noqa: E402
+from app.core.exceptions import DomainError  # noqa: E402
+from app.core.orm import BackendBase  # noqa: E402
 from app.exercises import repository  # noqa: E402
-from app.exercises.models import CatalogEntry  # noqa: E402
-import httpx  # noqa: E402
+from app.exercises.models import Exercise  # noqa: E402
 
-from scripts.sync_exercise_catalog import build_items, fetch_backend_catalog, put_items  # noqa: E402
-
-BACKEND_SAMPLE = {
-    "barbell-bench-press": {
-        "id": "11f18f47-0001-0000-8072-021f94ad3563",
-        "slug": "barbell-bench-press",
-        "name": "바벨 벤치프레스",
-        "thumbnailUrl": "https://cdn.example/thumbnails/barbell-bench-press.webp",
-        "videoUrl": "https://cdn.example/videos/barbell-bench-press.mp4",
-    },
-    "push-up": {
-        "id": "11f18f47-0002-0000-8072-021f94ad3563",
-        "slug": "push-up",
-        "name": "푸시업",
-        "thumbnailUrl": None,
-        "videoUrl": None,
-    },
-    "backend-only-exercise": {   # 로컬 metadata에 없는 신규 종목
-        "id": "11f18f47-0003-0000-8072-021f94ad3563",
-        "slug": "backend-only-exercise",
-        "name": "신규 종목",
-        "thumbnailUrl": "https://cdn.example/thumbnails/new.webp",
-        "videoUrl": "https://cdn.example/videos/new.mp4",
-    },
-}
-
-
-def _clear_caches():
-    # 테이블명·접속 설정을 걸고 캐시된 커넥션을 비운다 — moto 안팎의 클라이언트가 섞이지 않게
-    dynamo.bind_tables()
-    repository.get_exercise_catalog.cache_clear()
+BENCH_ID = uuid.UUID("11f18f47-0001-0000-8072-021f94ad3563")
 
 
 @pytest.fixture
-def catalog_table(monkeypatch):
-    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
-        monkeypatch.setenv(key, "testing")
-    with mock_aws():
-        _clear_caches()
-        resource = boto3.resource("dynamodb", region_name="ap-northeast-2")
-        resource.create_table(
-            TableName="exercise_catalog",
-            KeySchema=[{"AttributeName": "slug", "KeyType": "HASH"}],
-            AttributeDefinitions=[{"AttributeName": "slug", "AttributeType": "S"}],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        yield resource.Table("exercise_catalog")
-    _clear_caches()
+def catalog_db(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    BackendBase.metadata.create_all(engine)
+    monkeypatch.setattr(mysql, "_engine", lambda: engine)
+    monkeypatch.setattr(mysql, "is_configured", lambda: True)
+    with Session(engine) as session:
+        session.add(Exercise(
+            id=BENCH_ID.bytes, thumbnail_key="thumbnails/barbell-bench-press.webp",
+            video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
+            equipment_id=uuid.uuid4().bytes, difficulty="INTERMEDIATE",
+            exercise_type="WEIGHT_AND_REPS", instructions=[],
+        ))
+        session.commit()
+    repository._load_catalog.cache_clear()
+    yield
+    repository._load_catalog.cache_clear()
 
 
-def test_build_items_keeps_only_joined_slugs():
-    # 로컬 metadata에 없는 백엔드 신규 종목은 적재하지 않는다 — 조인 키는 slug
-    items = build_items(BACKEND_SAMPLE, {"barbell-bench-press", "push-up"})
-    assert [i["slug"] for i in items] == ["barbell-bench-press", "push-up"]
-    assert items[0]["exercise_id"] == "11f18f47-0001-0000-8072-021f94ad3563"
-    assert items[1]["video_url"] is None   # 영상 미등록 — 종목 마스터 videoUrl 폴백 대상
+def test_catalog_lookup_returns_uuid_and_cdn_urls(catalog_db):
+    assert repository.exercise_id("barbell-bench-press") == str(BENCH_ID)
+    assert repository.exercise_type("barbell-bench-press") == "WEIGHT_AND_REPS"
+    assert repository.cdn_video_url("barbell-bench-press").endswith("/videos/barbell-bench-press.mp4")
+    assert repository.cdn_thumbnail_url("barbell-bench-press").endswith("/thumbnails/barbell-bench-press.webp")
+    assert repository.cdn_video_url("barbell-bench-press").startswith("https://")
 
 
-def test_fetch_backend_catalog_reads_unwrapped_items(monkeypatch):
-    # 백엔드는 응답 봉투 없이 {"items": [...]} 를 준다 — slug 가 빠진 항목은 썸네일 파일명에서 유도
-    body = {"items": [{"id": "11f18f47-0001-0000-8072-021f94ad3563",
-                       "thumbnailUrl": "https://cdn.example/thumbnails/barbell-bench-press.webp"}]}
-    request = httpx.Request("GET", "https://api.test/api/v1/exercises")
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: httpx.Response(200, json=body, request=request))
-    catalog = fetch_backend_catalog("https://api.test/api/v1/exercises", 1.0)
-    assert catalog["barbell-bench-press"]["id"] == "11f18f47-0001-0000-8072-021f94ad3563"
-
-def test_catalog_lookup_returns_uuid_and_cdn_urls(catalog_table):
-    put_items(build_items(BACKEND_SAMPLE, {"barbell-bench-press"}))
-
-    assert repository.exercise_id("barbell-bench-press") == "11f18f47-0001-0000-8072-021f94ad3563"
-    assert repository.cdn_video_url("barbell-bench-press").endswith("barbell-bench-press.mp4")
-    assert repository.cdn_thumbnail_url("barbell-bench-press").endswith("barbell-bench-press.webp")
-
-
-def test_catalog_miss_returns_none_not_error(catalog_table):
-    # 배치가 아직 안 돈 종목 — 예외가 아니라 None으로 폴백 경로를 태운다
+def test_catalog_miss_returns_none_not_error(catalog_db):
+    # 마스터에 없는 종목 — 예외가 아니라 None으로 폴백 경로를 태운다
     assert repository.exercise_id("unknown-slug") is None
     assert repository.cdn_video_url("unknown-slug") is None
 
 
-def test_catalog_load_failure_degrades_to_empty(monkeypatch):
-    # 테이블 부재·권한 오류 등 — 서버를 깨뜨리지 않고 빈 카탈로그로 강등
-    repository.get_exercise_catalog.cache_clear()
-
-    def boom():
-        raise RuntimeError("dynamodb down")
-
-    monkeypatch.setattr(CatalogEntry, "scan", boom)
+def test_catalog_unconfigured_mysql_is_empty(monkeypatch):
+    monkeypatch.setattr(mysql, "is_configured", lambda: False)
     assert repository.get_exercise_catalog() == {}
-    repository.get_exercise_catalog.cache_clear()
+
+
+def test_catalog_load_failure_degrades_and_retries(monkeypatch, catalog_db):
+    # DB 장애 — 빈 카탈로그로 강등하되 실패는 캐시하지 않아 복구 후 다시 읽는다
+    real_fetch = mysql.fetch_all
+
+    def boom(stmt):
+        raise DomainError("기록 DB 조회에 실패했습니다.")
+
+    monkeypatch.setattr(mysql, "fetch_all", boom)
+    assert repository.get_exercise_catalog() == {}
+    monkeypatch.setattr(mysql, "fetch_all", real_fetch)
+    assert "barbell-bench-press" in repository.get_exercise_catalog()
 
 
 def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
@@ -133,13 +96,13 @@ def test_routine_payload_carries_exercise_id_and_cdn_thumbnail(monkeypatch):
     }}
     monkeypatch.setattr(repository, "get_exercise_catalog", lambda: catalog)
 
-    out = routines_service._build_response(routine, request, {}, ({}, {}), {})
+    out = routines_service._build_response(routine, request, {}, {})
     assert out.exercises[0].exercise_id == "11f18f47-0001-0000-8072-021f94ad3563"
     assert out.exercises[0].thumbnail_url.startswith("https://cdn.example/")   # S3 직접 주소 아님
 
     # 카탈로그 미스 — null + 적재값 폴백, 예외 없음
     monkeypatch.setattr(repository, "get_exercise_catalog", dict)
-    out = routines_service._build_response(routine, request, {}, ({}, {}), {})
+    out = routines_service._build_response(routine, request, {}, {})
     assert out.exercises[0].exercise_id is None
     assert "s3.amazonaws.com" in out.exercises[0].thumbnail_url
     assert out.exercises[0].sets[0].weight == 0   # 맨몸·추천 불가 — null 아닌 0
@@ -151,10 +114,11 @@ def catalog_only(monkeypatch):
     monkeypatch.setattr(repository, "get_exercise_catalog", lambda: {
         "barbell-bench-press": {
             "slug": "barbell-bench-press",
+            "name_ko": "바벨 벤치프레스",
             "exercise_id": "11f18f47-0001-0000-8072-021f94ad3563",
             "video_url": "https://cdn.example/videos/barbell-bench-press.mp4",
         },
-        "push-up": {"slug": "push-up", "exercise_id": "11f18f47-0002-0000-8072-021f94ad3563"},
+        "push-up": {"slug": "push-up", "name_ko": "푸시업", "exercise_id": "11f18f47-0002-0000-8072-021f94ad3563"},
     })
 
 
@@ -215,7 +179,7 @@ def test_set_shape_follows_exercise_type(monkeypatch, kind, expect):
     request = RoutineGenerateRequest(
         level="beginner", muscleGroups=["core"], minutes=30, includeWarmup=False
     )
-    out = routines_service._build_response(_routine_with("wall-sit"), request, {}, ({}, {}), {})
+    out = routines_service._build_response(_routine_with("wall-sit"), request, {}, {})
     first = out.exercises[0].sets[0]
     assert first.reps == expect["reps"]
     assert first.duration_seconds == expect["duration"]
@@ -237,7 +201,7 @@ def test_warmup_shortens_duration_instead_of_weight(monkeypatch):
         level="beginner", muscleGroups=["core"], minutes=30, includeWarmup=True
     )
     sets = routines_service._build_response(
-        _routine_with("hand-plank"), request, {}, ({}, {}), {}
+        _routine_with("hand-plank"), request, {}, {}
     ).exercises[0].sets
     # 플랭크 30초 × 초급 0.7 = 20초, 워밍업인 첫 세트만 절반
     assert sets[0].duration_seconds == 10
@@ -263,7 +227,7 @@ def test_duration_scales_by_exercise_and_level(monkeypatch, slug, level, expect)
     request = RoutineGenerateRequest(
         level=level, muscleGroups=["core"], minutes=30, includeWarmup=False
     )
-    out = routines_service._build_response(_routine_with(slug), request, {}, ({}, {}), {})
+    out = routines_service._build_response(_routine_with(slug), request, {}, {})
     assert out.exercises[0].sets[0].duration_seconds == expect
 
 
@@ -278,5 +242,5 @@ def test_unknown_duration_exercise_uses_config_default(monkeypatch):
     request = RoutineGenerateRequest(
         level="advanced", muscleGroups=["core"], minutes=30, includeWarmup=False
     )
-    out = routines_service._build_response(_routine_with("new-hold"), request, {}, ({}, {}), {})
+    out = routines_service._build_response(_routine_with("new-hold"), request, {}, {})
     assert out.exercises[0].sets[0].duration_seconds == 40   # 기본 30 × 1.3 → 40

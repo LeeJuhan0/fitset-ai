@@ -1,8 +1,6 @@
-from pynamodb.attributes import UnicodeAttribute
 from sqlalchemy import BINARY, JSON, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, column_property, mapped_column
 
-from app.core.dynamo import DynamoModel
 from app.core.orm import BackendBase
 
 
@@ -50,18 +48,3 @@ class ExerciseMuscle(BackendBase):
     exercise_id: Mapped[bytes] = mapped_column(ForeignKey("exercise.id"))
     muscle_id: Mapped[bytes] = mapped_column(ForeignKey("muscle.id"))
     role: Mapped[str] = mapped_column(String(10))
-
-
-class CatalogEntry(DynamoModel):
-    class Meta:
-        table_name = "exercise_catalog"
-
-    slug = UnicodeAttribute(hash_key=True)
-    exercise_id = UnicodeAttribute(null=True)
-    exercise_type = UnicodeAttribute(null=True)
-    thumbnail_url = UnicodeAttribute(null=True)
-    video_url = UnicodeAttribute(null=True)
-
-    def to_entry(self) -> dict:
-        """카탈로그 조회용 dict 변환 빈 필드 제외"""
-        return dict(self.attribute_values)

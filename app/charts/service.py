@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from app.charts import utils
-from app.exercises.repository import get_exercise_meta
+from app.exercises.repository import get_exercise_catalog
 from app.users import repository as users_repository
 from app.workouts import repository as workouts_repository
 
@@ -47,7 +47,7 @@ async def build_payload(
     if raw_days < days:
         logger.info("clamped workout raw window %d → %d days", days, raw_days)
     workouts = await asyncio.to_thread(workouts_repository.get_recent_workouts, user_id, raw_days)
-    meta = get_exercise_meta()
+    meta = get_exercise_catalog()
     if metric == "muscleVolume":
         if muscle is None:
             return None

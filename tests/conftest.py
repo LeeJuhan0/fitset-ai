@@ -16,6 +16,7 @@ from app.agent import graph
 from app.clients import mysql
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models   # noqa: F401 — 테이블 등록
+from app.exercises import repository as exercise_repository
 from app.users import models as users_models           # noqa: F401
 from app.workouts import models as workouts_models     # noqa: F401
 
@@ -46,7 +47,10 @@ def backend_engine(monkeypatch):
     )
     BackendBase.metadata.create_all(engine)
     monkeypatch.setattr(mysql, "_engine", lambda: engine)
-    return engine
+    monkeypatch.setattr(mysql, "is_configured", lambda: True)
+    exercise_repository._load_catalog.cache_clear()
+    yield engine
+    exercise_repository._load_catalog.cache_clear()
 
 
 async def call_tool(name: str, args: dict, user_id: str = "11111111-1111-1111-1111-111111111111") -> ToolMessage:

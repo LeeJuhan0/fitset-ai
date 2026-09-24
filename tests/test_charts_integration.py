@@ -1,13 +1,13 @@
 """차트 통합 테스트 — SQLite 시드 → charts.service → 직조회 repository → utils 집계.
 
 metric 9종의 유즈케이스를 실제 쿼리로 태워 §7 chart payload 계약(chartType·metric·
-x·series 길이 일치)까지 확인한다. 종목 메타(주동근)는 repo 동봉 metadata 실물을 쓴다.
+x·series 길이 일치)까지 확인한다. 종목 메타(주동근)는 시드한 exercise_muscle 에서 읽는다.
 """
 from datetime import datetime, timedelta, timezone
 
 from app.charts import service as charts_service
 from app.clients import mysql
-from app.exercises.models import Equipment, Exercise
+from app.exercises.models import Equipment, Exercise, ExerciseMuscle, Muscle
 from app.users.models import BodyWeightHistory, UserProfile
 from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import seed, uid
@@ -43,11 +43,12 @@ def _seed_all(engine) -> None:
                     birth_date=datetime(1995, 4, 12).date(), height=175.0,
                     workout_goal="HYPERTROPHY", level="INTERMEDIATE"),
         Equipment(id=uid("eq"), thumbnail_key="equipments/barbell.webp", name="바벨"),
-        # slug는 실제 마스터에 있는 종목 — muscleVolume이 metadata의 주동근(chest)을 참조한다
         Exercise(id=uid("bench"), thumbnail_key="thumbnails/barbell-bench-press.webp",
                  video_key="videos/barbell-bench-press.mp4", name="바벨 벤치프레스",
                  equipment_id=uid("eq"), difficulty="INTERMEDIATE",
                  exercise_type="WEIGHT_AND_REPS", instructions=[]),
+        Muscle(id=uid("chest"), thumbnail_key="muscles/chest.webp", name="가슴"),
+        ExerciseMuscle(id=uid("em"), exercise_id=uid("bench"), muscle_id=uid("chest"), role="PRIMARY"),
         _weight(20, 74.5), _weight(10, 73.2), _weight(1, 72.4),
         *_session("a", 9, [(60, 10), (60, 10)]),
         *_session("b", 2, [(65, 8), (67.5, 6)]),

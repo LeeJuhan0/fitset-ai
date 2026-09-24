@@ -8,11 +8,7 @@ class Settings(BaseSettings):
 
     aws_region: str = "ap-northeast-2"
 
-
-    exercise_metadata_path: str = "data/exercise-metadata.ko.json"
-
-    exercise_catalog_table: str = "exercise_catalog"
-    backend_exercises_url: str = "https://api.fitset.kro.kr/api/v1/exercises"
+    media_cdn_base_url: str = "https://dtcevtkuvdwt9.cloudfront.net"
 
     workout_days: int = 28
 
