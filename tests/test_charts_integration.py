@@ -56,7 +56,7 @@ def _seed_all(engine) -> None:
 
 def _assert_payload_contract(payload: dict, metric: str) -> None:
     assert payload["metric"] == metric
-    assert payload["chartType"] in ("line", "bar")
+    assert type(payload["chartType"]) is str and payload["chartType"] in ("line", "bar")
     assert len(payload["x"]) == len(payload["series"][0]["values"])
     assert payload["x"], metric   # 빈 차트면 None이어야지 빈 배열이면 안 된다
 

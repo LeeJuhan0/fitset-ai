@@ -44,7 +44,7 @@ def _payload(
 ) -> dict:
     """차트 페이로드 축 라벨과 시리즈 값 조립"""
     return {
-        "chartType": chart_type,
+        "chartType": chart_type.value,
         "metric": metric,
         "title": title,
         "xLabel": x_label,
