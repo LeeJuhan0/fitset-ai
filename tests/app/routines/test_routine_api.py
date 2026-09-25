@@ -57,6 +57,26 @@ async def test_부위_수준_시간_조건을_벗어난_루틴은_추천하지_�
     assert response.status_code == expected_status_code
 
 
+
+@pytest.mark.parametrize("muscle_groups, expected_status_code", [
+    # 기피 부위가 든 루틴은 제외
+    (["glutes"], status.HTTP_409_CONFLICT),
+
+    # 요청 부위와 겹치는 기피 부위는 요청이 우선
+    (["quadriceps"], status.HTTP_200_OK),
+])
+@pytest.mark.usefixtures("avoided_quadriceps", "leg_routine", "llm")
+async def test_프로필_기피_부위가_든_루틴은_요청_부위가_아니면_추천하지_않는다(
+    auth_client: TestClient,
+    muscle_groups: list[str],
+    expected_status_code: int,
+):
+    payload = {**LEG_PAYLOAD, "muscleGroups": muscle_groups}
+
+    response = auth_client.post(ROUTINE_URL, json=payload)
+
+    assert response.status_code == expected_status_code
+
 @pytest.mark.usefixtures("user_profile", "push_up_workouts", "llm")
 async def test_맨몸_운동_위주의_홈트_사용자에게는_맨몸_루틴만_추천한다(
     auth_client: TestClient,
