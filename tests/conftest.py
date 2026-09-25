@@ -1,14 +1,18 @@
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import jwt
 import pytest
+from alembic import command
+from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from moto import mock_aws
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -31,6 +35,8 @@ from app.workouts import models as workouts_models  # noqa: F401
 
 NOW = datetime(2026, 9, 25, 3, 0, tzinfo=timezone.utc)
 USER_ID = "11111111-1111-1111-1111-111111111111"
+ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+PG_TEST_DSN = os.environ.get("PG_TEST_DSN")
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +99,30 @@ def seed(mysql_engine):
             session.commit()
         return rows
     return insert
+
+@pytest.fixture(scope="session")
+def pg_schema():
+    """실제 pgvector 에 Alembic 마이그레이션 적용"""
+    if not PG_TEST_DSN:
+        pytest.skip("PG_TEST_DSN 미설정")
+    engine = create_engine(PG_TEST_DSN)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS routines, alembic_version"))
+    config = Config(ALEMBIC_INI)
+    config.set_main_option("sqlalchemy.url", PG_TEST_DSN)
+    command.upgrade(config, "head")
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def pg_engine(pg_schema, monkeypatch):
+    """테스트마다 비운 routines 를 앱 PG 엔진으로"""
+    with pg_schema.begin() as conn:
+        conn.execute(text("TRUNCATE routines RESTART IDENTITY"))
+    monkeypatch.setattr(postgres, "_engine", lambda: pg_schema)
+    monkeypatch.setattr(postgres, "is_configured", lambda: True)
+    return pg_schema
 
 @pytest.fixture
 def client():
