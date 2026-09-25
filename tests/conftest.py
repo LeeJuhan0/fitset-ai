@@ -1,13 +1,17 @@
 import pytest
 from fastapi.testclient import TestClient
+from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+from app.chat.models import MessageRecord, ThreadRecord
 from app.clients import mysql
+from app.core import dynamo
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models  # noqa: F401
 from app.exercises import repository as exercises_repository
 from app.main import app
+from app.memory.models import UserSummaryRecord
 from app.users import models as users_models  # noqa: F401
 from app.workouts import models as workouts_models  # noqa: F401
 
@@ -33,3 +37,21 @@ def mysql_engine(monkeypatch):
 def client():
     """lifespan 없이 실제 라우터를 부르는 클라이언트"""
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def aws(monkeypatch):
+    """가짜 자격증명과 moto 로 실제 AWS 차단"""
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.setenv(key, "testing")
+    with mock_aws():
+        yield
+
+
+@pytest.fixture
+def dynamo_tables(aws):
+    """moto 위 채팅과 유저 요약 테이블 생성"""
+    dynamo.bind_tables()
+    for model in (ThreadRecord, MessageRecord, UserSummaryRecord):
+        model.create_table(billing_mode="PAY_PER_REQUEST", wait=True)
+
