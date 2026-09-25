@@ -105,6 +105,19 @@ async def test_기록이_있는_종목은_실측_기록_기준_무게를_추천�
     assert [s["weight"] for s in sets] == [100, 100, 100]
 
 
+
+@pytest.mark.usefixtures("user_profile", "deleted_squat_workout", "leg_routine", "llm")
+async def test_사용자가_삭제한_운동_기록은_무게_추천에_쓰지_않는다(
+    auth_client: TestClient,
+):
+    payload = LEG_PAYLOAD
+
+    response = auth_client.post(ROUTINE_URL, json=payload)
+
+    assert response.status_code == status.HTTP_200_OK
+    sets = response.json()["data"]["routine"]["exercises"][0]["sets"]
+    assert [s["weight"] for s in sets] == [0, 0, 0]
+
 @pytest.mark.usefixtures("user_profile", "squat_workout", "leg_routine", "llm")
 async def test_워밍업을_포함하면_첫_세트를_가볍게_추천한다(
     auth_client: TestClient,

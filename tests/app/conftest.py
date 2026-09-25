@@ -127,3 +127,11 @@ def avoided_quadriceps(seed, user_profile, quadriceps):
         id=uuid.uuid4().bytes, user_id=mysql.uuid_bytes(USER_ID), muscle_id=quadriceps.id,
     )
     return seed(avoided)[0]
+
+
+@pytest.fixture
+def deleted_squat_workout(seed, barbell_squat):
+    """사용자가 삭제한 바벨 스쿼트 100kg 5회 3세트 기록"""
+    rows = _workout(barbell_squat, [(100, 5)] * 3, days_ago=2)
+    rows[0].deleted_at = (NOW - timedelta(days=1)).replace(tzinfo=None)
+    return seed(*rows)
