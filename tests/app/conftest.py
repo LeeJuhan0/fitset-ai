@@ -26,3 +26,26 @@ def barbell_squat(seed, barbell):
         instructions=[],
     )
     return seed(exercise)[0]
+
+
+@pytest.fixture
+def bodyweight(seed):
+    """맨몸 장비"""
+    equipment = Equipment(id=uuid.uuid4().bytes, thumbnail_key="equipments/bodyweight.webp", name="맨몸")
+    return seed(equipment)[0]
+
+
+@pytest.fixture
+def push_up(seed, bodyweight):
+    """맨몸 렙 종목 푸시업"""
+    exercise = Exercise(
+        id=uuid.uuid4().bytes,
+        name="푸시업",
+        thumbnail_key="thumbnails/push-up.webp",
+        video_key="videos/push-up.mp4",
+        equipment_id=bodyweight.id,
+        difficulty="BEGINNER",
+        exercise_type="REPS_ONLY",
+        instructions=[],
+    )
+    return seed(exercise)[0]
