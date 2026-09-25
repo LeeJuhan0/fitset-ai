@@ -140,13 +140,19 @@ def chat_model(monkeypatch):
     return replies
 
 @pytest.fixture
-def auth_client(monkeypatch):
-    """테스트 키페어로 서명한 토큰을 단 클라이언트"""
+def signing_key(monkeypatch):
+    """테스트 키페어 생성 후 공개키 주입"""
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_pem = private_key.public_key().public_bytes(
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode()
     monkeypatch.setattr(get_settings(), "jwt_public_key_pem", public_pem)
+    return private_key
+
+
+@pytest.fixture
+def auth_client(signing_key):
+    """테스트 키페어로 서명한 토큰을 단 클라이언트"""
     claims = {"sub": USER_ID, "exp": datetime.now(timezone.utc) + timedelta(minutes=15)}
-    token = jwt.encode(claims, private_key, algorithm="RS256")
+    token = jwt.encode(claims, signing_key, algorithm="RS256")
     return TestClient(app, headers={"Authorization": f"Bearer {token}"})
