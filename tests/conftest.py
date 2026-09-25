@@ -1,12 +1,19 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from app.chat.models import MessageRecord, ThreadRecord
-from app.clients import mysql
+from app.clients import bedrock, mysql
 from app.core import dynamo
+from app.core.config import get_settings
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models  # noqa: F401
 from app.exercises import repository as exercises_repository
@@ -14,6 +21,9 @@ from app.main import app
 from app.memory.models import UserSummaryRecord
 from app.users import models as users_models  # noqa: F401
 from app.workouts import models as workouts_models  # noqa: F401
+
+
+USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
 @pytest.fixture(autouse=True)
@@ -55,3 +65,29 @@ def dynamo_tables(aws):
     for model in (ThreadRecord, MessageRecord, UserSummaryRecord):
         model.create_table(billing_mode="PAY_PER_REQUEST", wait=True)
 
+
+@pytest.fixture
+def llm(monkeypatch):
+    """Bedrock 호출을 테스트가 정한 응답으로 대체"""
+    fake = SimpleNamespace(
+        text="테스트 응답",
+        structured={},
+        embedding=[1.0] + [0.0] * (get_settings().embed_dimension - 1),
+    )
+    monkeypatch.setattr(bedrock, "complete", lambda system, user, max_tokens=None: fake.text)
+    monkeypatch.setattr(bedrock, "structured", lambda schema, system, user: fake.structured.get(schema))
+    monkeypatch.setattr(bedrock, "embed_query", lambda text: fake.embedding)
+    return fake
+
+
+@pytest.fixture
+def auth_client(monkeypatch):
+    """테스트 키페어로 서명한 토큰을 단 클라이언트"""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    monkeypatch.setattr(get_settings(), "jwt_public_key_pem", public_pem)
+    claims = {"sub": USER_ID, "exp": datetime.now(timezone.utc) + timedelta(minutes=15)}
+    token = jwt.encode(claims, private_key, algorithm="RS256")
+    return TestClient(app, headers={"Authorization": f"Bearer {token}"})
