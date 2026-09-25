@@ -5,8 +5,8 @@ from decimal import Decimal
 import pytest
 
 from app.clients import mysql
-from app.exercises.models import Equipment, Exercise
-from app.users.models import UserProfile
+from app.exercises.models import Equipment, Exercise, Muscle
+from app.users.models import UserAvoidedMuscle, UserProfile
 from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
 from tests.conftest import NOW, USER_ID
 
@@ -111,3 +111,19 @@ def push_up_workouts(seed, push_up):
     """최근 3회 푸시업만 한 홈트 기록"""
     rows = [row for days_ago in (1, 3, 5) for row in _workout(push_up, [(0, 15)] * 3, days_ago)]
     return seed(*rows)
+
+
+@pytest.fixture
+def quadriceps(seed):
+    """대퇴사두근 근육"""
+    muscle = Muscle(id=uuid.uuid4().bytes, thumbnail_key="muscles/quadriceps.webp", name="대퇴사두근")
+    return seed(muscle)[0]
+
+
+@pytest.fixture
+def avoided_quadriceps(seed, user_profile, quadriceps):
+    """프로필에 대퇴사두근 기피 등록"""
+    avoided = UserAvoidedMuscle(
+        id=uuid.uuid4().bytes, user_id=mysql.uuid_bytes(USER_ID), muscle_id=quadriceps.id,
+    )
+    return seed(avoided)[0]
