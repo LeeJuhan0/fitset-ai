@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from moto import mock_aws
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.agent import graph
@@ -15,7 +16,7 @@ from app.auth import repository as auth_repository
 from app.chat import service as chat_service
 from app.chat.models import MessageRecord, ThreadRecord
 from app.clients import bedrock, mysql, postgres
-from app.core import dynamo
+from app.core import clock, dynamo, ulid
 from app.core.config import Settings, get_settings
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models  # noqa: F401
@@ -27,6 +28,7 @@ from app.users import models as users_models  # noqa: F401
 from app.workouts import models as workouts_models  # noqa: F401
 
 
+NOW = datetime(2026, 9, 25, 3, 0, tzinfo=timezone.utc)
 USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
@@ -71,6 +73,25 @@ def mysql_engine(monkeypatch):
     exercises_repository._load_catalog.cache_clear()
     engine.dispose()
 
+
+@pytest.fixture(autouse=True)
+def now(monkeypatch):
+    """현재 시각을 NOW 로 고정"""
+    monkeypatch.setattr(clock, "now_utc", lambda: NOW)
+    monkeypatch.setattr(ulid, "now_utc", lambda: NOW)
+    return NOW
+
+
+@pytest.fixture
+def seed(mysql_engine):
+    """엔티티 목록을 백엔드 대역 DB 에 커밋"""
+    def insert(*rows):
+        """행 추가 후 한 트랜잭션 커밋"""
+        with Session(mysql_engine, expire_on_commit=False) as session:
+            session.add_all(rows)
+            session.commit()
+        return rows
+    return insert
 
 @pytest.fixture
 def client():
