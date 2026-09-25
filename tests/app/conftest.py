@@ -104,3 +104,10 @@ def user_profile(seed):
 def squat_workout(seed, barbell_squat):
     """이틀 전 바벨 스쿼트 100kg 5회 3세트 기록"""
     return seed(*_workout(barbell_squat, [(100, 5)] * 3, days_ago=2))
+
+
+@pytest.fixture
+def push_up_workouts(seed, push_up):
+    """최근 3회 푸시업만 한 홈트 기록"""
+    rows = [row for days_ago in (1, 3, 5) for row in _workout(push_up, [(0, 15)] * 3, days_ago)]
+    return seed(*rows)
