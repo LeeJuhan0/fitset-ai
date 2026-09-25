@@ -15,6 +15,7 @@ class WorkoutHistory(BackendBase):
     started_at: Mapped[datetime] = mapped_column(DateTime)
     ended_at: Mapped[datetime] = mapped_column(DateTime)
     active_duration_seconds: Mapped[int] = mapped_column("active_duration", Integer)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class WorkoutHistoryExercise(BackendBase):

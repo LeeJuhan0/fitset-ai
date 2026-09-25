@@ -32,7 +32,11 @@ def _user_sets(user_id: bytes, days: int) -> Select:
         .join(WorkoutHistoryExercise, WorkoutHistoryExercise.workout_history_id == WorkoutHistory.id)
         .join(Exercise, Exercise.id == WorkoutHistoryExercise.exercise_id)
         .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id)
-        .where(WorkoutHistory.user_id == user_id, WorkoutHistory.started_at >= _since(days))
+        .where(
+            WorkoutHistory.user_id == user_id,
+            WorkoutHistory.deleted_at.is_(None),
+            WorkoutHistory.started_at >= _since(days),
+        )
     )
 
 
@@ -46,7 +50,11 @@ def _session_summary(user_id: bytes, days: int, limit: int) -> Select:
             func.count(func.distinct(WorkoutHistory.id)).label("sessions"),
             func.sum(active).label("active_seconds"),
         )
-        .where(WorkoutHistory.user_id == user_id, WorkoutHistory.started_at >= _since(days))
+        .where(
+            WorkoutHistory.user_id == user_id,
+            WorkoutHistory.deleted_at.is_(None),
+            WorkoutHistory.started_at >= _since(days),
+        )
         .group_by(workout_date)
         .order_by(workout_date.desc())
         .limit(limit)

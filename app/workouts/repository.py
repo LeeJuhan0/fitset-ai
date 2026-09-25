@@ -24,7 +24,11 @@ def get_recent_workouts(user_id: str, days: int) -> list[dict]:
     """최근 세션별 종목 세트 중첩 기록 최신순 조회"""
     sessions = mysql.fetch_all(
         select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at)
-        .where(WorkoutHistory.user_id == mysql.uuid_bytes(user_id), WorkoutHistory.started_at >= _cutoff(days))
+        .where(
+            WorkoutHistory.user_id == mysql.uuid_bytes(user_id),
+            WorkoutHistory.deleted_at.is_(None),
+            WorkoutHistory.started_at >= _cutoff(days),
+        )
         .order_by(WorkoutHistory.started_at.desc())
     )
     if not sessions:
@@ -106,6 +110,7 @@ def get_exercise_sets(user_id: str, slug: str, days: int) -> list[dict]:
         .join(WorkoutHistorySet, WorkoutHistorySet.workout_exercise_history_id == WorkoutHistoryExercise.id)
         .where(
             WorkoutHistory.user_id == mysql.uuid_bytes(user_id),
+            WorkoutHistory.deleted_at.is_(None),
             Exercise.slug == slug,
             WorkoutHistory.started_at >= _cutoff(days),
         )
@@ -129,7 +134,11 @@ def get_workout_sessions(user_id: str, days: int) -> list[dict]:
     """세션 시작 종료 활동 시간 요약 목록 조회"""
     rows = mysql.fetch_all(
         select(WorkoutHistory.id, WorkoutHistory.started_at, WorkoutHistory.ended_at, WorkoutHistory.active_duration_seconds)
-        .where(WorkoutHistory.user_id == mysql.uuid_bytes(user_id), WorkoutHistory.started_at >= _cutoff(days))
+        .where(
+            WorkoutHistory.user_id == mysql.uuid_bytes(user_id),
+            WorkoutHistory.deleted_at.is_(None),
+            WorkoutHistory.started_at >= _cutoff(days),
+        )
         .order_by(WorkoutHistory.started_at)
     )
     return [
