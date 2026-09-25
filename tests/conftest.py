@@ -10,21 +10,50 @@ from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+from app.agent import graph
+from app.auth import repository as auth_repository
+from app.chat import service as chat_service
 from app.chat.models import MessageRecord, ThreadRecord
-from app.clients import bedrock, mysql
+from app.clients import bedrock, mysql, postgres
 from app.core import dynamo
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models  # noqa: F401
 from app.exercises import repository as exercises_repository
 from app.main import app
 from app.memory.models import UserSummaryRecord
+from app.routines import service as routines_service
 from app.users import models as users_models  # noqa: F401
 from app.workouts import models as workouts_models  # noqa: F401
 
 
 USER_ID = "11111111-1111-1111-1111-111111111111"
 
+
+@pytest.fixture(autouse=True)
+def settings(monkeypatch):
+    """.env 와 셸 환경변수 없는 기본값 설정"""
+    current = get_settings()
+    defaults = Settings.model_construct()
+    for name in Settings.model_fields:
+        monkeypatch.setattr(current, name, getattr(defaults, name))
+    return current
+
+
+@pytest.fixture(autouse=True)
+def caches():
+    """테스트 사이 새는 앱 싱글턴 캐시 비우기"""
+    for cached in (
+        chat_service.chat_limiter,
+        routines_service.routine_limiter,
+        auth_repository._public_key,
+        bedrock._runtime,
+        bedrock.chat_runtime,
+        bedrock._structured_model,
+        graph._model,
+        postgres._engine,
+    ):
+        cached.cache_clear()
 
 @pytest.fixture(autouse=True)
 def mysql_engine(monkeypatch):
