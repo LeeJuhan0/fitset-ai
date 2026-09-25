@@ -6,6 +6,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from moto import mock_aws
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -129,6 +130,14 @@ def llm(monkeypatch):
     monkeypatch.setattr(bedrock, "embed_query", lambda text: fake.embedding)
     return fake
 
+
+@pytest.fixture
+def chat_model(monkeypatch):
+    """에이전트 모델을 테스트가 넣은 답변 순서로 대체"""
+    replies = []
+    model = GenericFakeChatModel(messages=iter(replies), disable_streaming=True)
+    monkeypatch.setattr(graph, "_model", lambda: model)
+    return replies
 
 @pytest.fixture
 def auth_client(monkeypatch):
