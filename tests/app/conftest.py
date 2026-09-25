@@ -1,8 +1,42 @@
 import uuid
+from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
+from app.clients import mysql
 from app.exercises.models import Equipment, Exercise
+from app.users.models import UserProfile
+from app.workouts.models import WorkoutHistory, WorkoutHistoryExercise, WorkoutHistorySet
+from tests.conftest import NOW, USER_ID
+
+
+def _workout(exercise: Exercise, sets: list[tuple[float, int]], days_ago: int) -> list:
+    """종목 하나짜리 운동 기록 세션 행 목록"""
+    started_at = (NOW - timedelta(days=days_ago)).replace(tzinfo=None)
+    history = WorkoutHistory(
+        id=uuid.uuid4().bytes,
+        user_id=mysql.uuid_bytes(USER_ID),
+        started_at=started_at,
+        ended_at=started_at + timedelta(hours=1),
+        active_duration_seconds=3600,
+    )
+    entry = WorkoutHistoryExercise(
+        id=uuid.uuid4().bytes, workout_history_id=history.id, exercise_id=exercise.id, order_index=0,
+    )
+    set_rows = [
+        WorkoutHistorySet(
+            id=uuid.uuid4().bytes,
+            workout_exercise_history_id=entry.id,
+            order_index=index,
+            duration_seconds=0,
+            rest_seconds=90,
+            weight=Decimal(str(weight)),
+            reps=reps,
+        )
+        for index, (weight, reps) in enumerate(sets)
+    ]
+    return [history, entry, *set_rows]
 
 
 @pytest.fixture
@@ -49,3 +83,24 @@ def push_up(seed, bodyweight):
         instructions=[],
     )
     return seed(exercise)[0]
+
+
+@pytest.fixture
+def user_profile(seed):
+    """근비대 목표 초급 유저 프로필"""
+    profile = UserProfile(
+        id=uuid.uuid4().bytes,
+        user_id=mysql.uuid_bytes(USER_ID),
+        gender="MALE",
+        birth_date=date(1995, 1, 1),
+        height=Decimal("175.0"),
+        workout_goal="HYPERTROPHY",
+        level="BEGINNER",
+    )
+    return seed(profile)[0]
+
+
+@pytest.fixture
+def squat_workout(seed, barbell_squat):
+    """이틀 전 바벨 스쿼트 100kg 5회 3세트 기록"""
+    return seed(*_workout(barbell_squat, [(100, 5)] * 3, days_ago=2))
