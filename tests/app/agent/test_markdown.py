@@ -70,6 +70,24 @@ def test_스트리밍_필터는_조각_크기와_무관하게_한번에_정제�
     assert streamed == plain_answer
 
 
+@pytest.mark.parametrize("size", [1, 2, 3, 5, 8])
+def test_스트리밍_필터는_언어_태그가_붙은_코드_펜스를_쪼개져도_지운다(size: int):
+    text = "예시\n```python\nprint(1)\n```\n끝"
+
+    streamed = _stream(text, size)
+
+    assert streamed == strip_markdown(text) == "예시\nprint(1)\n끝"
+
+
+def test_스트리밍_필터는_코드_펜스_줄을_줄바꿈까지_보류한다():
+    stream_filter = MarkdownStreamFilter()
+
+    first = stream_filter.feed("```py")
+    second = stream_filter.feed("thon\nprint(1)")
+
+    assert (first, second) == ("", "print(1)")
+
+
 def test_스트리밍_필터는_쪼개진_굵게_기호를_다음_조각까지_보류한다():
     stream_filter = MarkdownStreamFilter()
 

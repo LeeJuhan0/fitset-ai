@@ -47,6 +47,9 @@ def _hold_from(pending: str, at_line_start: bool) -> int:
     starts_line = newline != -1 or at_line_start
     if starts_line and not pending[line_start:cut].strip(" \t" + HOLD_CHARS):
         cut = line_start
+    fence = pending.rfind("```", 0, cut)
+    if fence != -1 and "\n" not in pending[fence:]:
+        cut = min(cut, fence)
     bracket = pending.rfind("[", 0, cut)
     if bracket != -1 and ")" not in pending[bracket:] and len(pending) - bracket <= LINK_HOLD_LIMIT:
         cut = min(cut, bracket)
