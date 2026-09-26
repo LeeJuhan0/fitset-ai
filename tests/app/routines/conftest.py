@@ -67,3 +67,35 @@ def add_routine(pg_engine, settings: Settings):
 def leg_routine(add_routine, barbell_squat):
     """초급 60분 하체 바벨 스쿼트 루틴"""
     return add_routine("leg-day", ["quadriceps", "glutes"], [("barbell-squat", "바벨 스쿼트")])
+
+
+@pytest.fixture
+def weight_meta() -> dict:
+    """바벨 덤벨 맨몸 종목 장비 카탈로그"""
+    return {
+        "barbell-squat": {"slug": "barbell-squat", "equipment": ["Barbell"]},
+        "dumbbell-curl": {"slug": "dumbbell-curl", "equipment": ["Dumbbell"]},
+        "push-up": {"slug": "push-up", "equipment": ["Bodyweight"]},
+    }
+
+
+@pytest.fixture
+def weight_workouts() -> list[dict]:
+    """12렙 초과 맨몸 미등록 종목 섞인 두 세션 기록"""
+    return [
+        {
+            "startedAt": "2026-09-15T09:00:00Z",
+            "exercises": [
+                {"slug": "barbell-squat", "sets": [{"weight": 100.0, "reps": 5}, {"weight": 120.0, "reps": 15}]},
+                {"slug": "push-up", "sets": [{"weight": None, "reps": 20}]},
+            ],
+        },
+        {
+            "startedAt": "2026-09-22T09:00:00Z",
+            "exercises": [
+                {"slug": "barbell-squat", "sets": [{"weight": 110.0, "reps": 3}]},
+                {"exerciseId": "dumbbell-curl", "sets": [{"weight": 12.0, "reps": 10}]},
+                {"slug": "unknown-exercise", "sets": [{"weight": 50.0, "reps": 5}]},
+            ],
+        },
+    ]
