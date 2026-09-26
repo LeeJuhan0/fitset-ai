@@ -65,3 +65,48 @@ def conversation(thread):
             message.save()
             messages.append(message)
     return messages
+
+
+def _message(role: MessageRole, minutes_ago: int, content: str | None, **fields) -> MessageRecord:
+    """저장하지 않은 메시지 레코드 조립"""
+    moment = NOW - timedelta(minutes=minutes_ago)
+    return MessageRecord(
+        thread_id="thread",
+        message_id=new_ulid(moment),
+        user_id=USER_ID,
+        role=role,
+        content=content,
+        created_at=iso_utc(moment),
+        **fields,
+    )
+
+
+@pytest.fixture
+def unanswered_history() -> list[MessageRecord]:
+    """답변 실패로 유저 메시지만 남은 턴 섞인 이력"""
+    return [
+        _message(MessageRole.USER, 10, "스쿼트 몇 세트 해요"),
+        _message(MessageRole.ASSISTANT, 9, "5세트요"),
+        _message(MessageRole.USER, 8, "벤치는요"),
+        _message(MessageRole.USER, 7, "데드는요"),
+        _message(MessageRole.ASSISTANT, 6, "3세트요"),
+        _message(MessageRole.USER, 5, "마지막 질문"),
+    ]
+
+
+@pytest.fixture
+def chart_message() -> MessageRecord:
+    """주별 운동 횟수 차트를 실은 답변 메시지"""
+    payload = {"chartType": "bar", "x": ["9/14", "9/21"], "series": [{"name": "운동 횟수", "values": [2, 1]}]}
+    return _message(MessageRole.ASSISTANT, 1, "이번 달 기록이에요", response_scheme="chart", payload=payload)
+
+
+@pytest.fixture
+def activity_threads() -> list[ThreadRecord]:
+    """활동 시각 같음 다름 없음 섞인 저장 전 대화 목록"""
+    return [
+        ThreadRecord(user_id=USER_ID, thread_id="01A", last_message_at="2026-09-25T01:00:00Z", created_at="2026-09-24T00:00:00Z"),
+        ThreadRecord(user_id=USER_ID, thread_id="01B", last_message_at="2026-09-25T02:00:00Z", created_at="2026-09-24T00:00:00Z"),
+        ThreadRecord(user_id=USER_ID, thread_id="01C", last_message_at=None, created_at="2026-09-24T00:00:00Z"),
+        ThreadRecord(user_id=USER_ID, thread_id="01D", last_message_at="2026-09-25T01:00:00Z", created_at="2026-09-24T00:00:00Z"),
+    ]
