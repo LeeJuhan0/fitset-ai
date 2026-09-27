@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fitset-ai-server
+spec:
+  selector:
+    app: fitset-ai-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fitset-ai-server
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: fitset-ai-server
+  template:
+    metadata:
+      labels:
+        app: fitset-ai-server
+        tags.datadoghq.com/service: fitset-ai-server
+    spec:
+      serviceAccountName: fitset-ai-server
+      # 채팅 SSE 는 수십 초 걸린다. preStop 10초 뒤 uvicorn 이 진행 중 요청을 마칠 여유를 준다.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: fitset-ai-server
+          image: fitset-ai-server
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: fitset-ai-server
+          env:
+            - name: AWS_REGION
+              value: ap-northeast-2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            # ALB 가 타깃을 빼는 동안 들어오는 요청을 받아낸다. 바로 종료하면 그 사이 요청이 502 가 된다.
+            preStop:
+              sleep:
+                seconds: 10

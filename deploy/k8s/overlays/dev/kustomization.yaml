@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fitset-dev
+resources:
+  - ../../base
+  - externalsecret.yaml
+  - ingress.yaml
+patches:
+  - path: patch-deployment.yaml
+# IMAGE_TAG 는 CD 가 커밋 SHA 로 치환한다(patch-deployment.yaml 의 버전 라벨도 같이).
+images:
+  - name: fitset-ai-server
+    newName: 729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server
+    newTag: IMAGE_TAG

@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fitset-ai-server
+spec:
+  template:
+    metadata:
+      labels:
+        tags.datadoghq.com/env: dev
+        tags.datadoghq.com/version: IMAGE_TAG
+    spec:
+      nodeSelector:
+        pool: dev
+      containers:
+        - name: fitset-ai-server
+          env:
+            # 환경별 DynamoDB 사본. 기본값은 prod 이름이라 반드시 덮어써야 한다.
+            - name: CHAT_THREADS_TABLE
+              value: chat_threads_dev
+            - name: CHAT_MESSAGES_TABLE
+              value: chat_messages_dev
+            - name: USER_SUMMARIES_TABLE
+              value: user_summaries_dev
+            - name: PG_HOST
+              value: fitset-dev-pgvector.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+            - name: MYSQL_HOST
+              value: fitset-dev-rds.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+            - name: JWT_PUBLIC_KEY_PARAM
+              value: /fitset/dev/jwt/public-key

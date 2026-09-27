@@ -1,0 +1,35 @@
+# fitset-api 의 Ingress 와 group.name 이 같아 ALB(fitset-dev) 하나를 나눠 쓴다.
+# ALB·리스너 설정(scheme·인증서·포트 등)은 그룹 안에서 값이 같아야 하므로 fitset-api 와 맞춰 둔다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fitset-ai-server
+  annotations:
+    alb.ingress.kubernetes.io/group.name: fitset-dev
+    # fitset-api 의 "/" 규칙(order 0)보다 먼저 평가돼야 /ai 가 백엔드로 새지 않는다.
+    alb.ingress.kubernetes.io/group.order: "-10"
+    alb.ingress.kubernetes.io/load-balancer-name: fitset-dev
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:729743892772:certificate/3c36cb98-10bc-4b89-a742-fb0693dbf1c0
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30
+    alb.ingress.kubernetes.io/tags: project=fitset,env=dev
+spec:
+  ingressClassName: alb
+  rules:
+    - host: api-dev.fitset.kro.kr
+      http:
+        paths:
+          - path: /ai
+            pathType: Prefix
+            backend:
+              service:
+                name: fitset-ai-server
+                port:
+                  name: http

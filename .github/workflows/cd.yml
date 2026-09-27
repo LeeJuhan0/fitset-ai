@@ -16,7 +16,8 @@ permissions:
 env:
   AWS_REGION: ap-northeast-2
   ECR_REPOSITORY: fitset-ai-server
-  INSTANCE_ID: i-015b33f7efe9e5fa1
+  EKS_CLUSTER: fitset
+  K8S_NAMESPACE: fitset-dev
   DEV_HOST: api-dev.fitset.kro.kr
 
 jobs:
@@ -70,43 +71,30 @@ jobs:
         if: always()
         run: echo "built=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy via SSM
-        id: send
+      - name: Deploy to EKS
+        id: deploy
         run: |
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name AWS-RunShellScript \
-            --timeout-seconds 600 \
-            --parameters '{"commands":[
-              "set -e",
-              "aws s3 sync s3://fitset-deploy-artifacts/dev/ai-compose/ /opt/fitset/ --delete",
-              "chmod +x /opt/fitset/up.sh",
-              "echo ${{ github.sha }} > /opt/fitset/image",
-              "/opt/fitset/up.sh",
-              "for i in $(seq 1 60); do curl -fsS localhost:8000/health >/dev/null && exit 0; sleep 5; done",
-              "echo 헬스체크가 5분을 넘겼다. 컨테이너 로그를 남긴다.",
-              "docker logs --tail 100 fitset-ai 2>&1 || true",
-              "exit 1"
-            ]}' \
-            --query Command.CommandId --output text)
-          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
 
-      - name: Wait for deployment
+          # 레포의 매니페스트는 IMAGE_TAG 자리표시자로 두고, 배포할 때만 커밋 SHA 로 채운다.
+          OVERLAY=deploy/k8s/overlays/dev
+          sed -i "s/IMAGE_TAG/${{ github.sha }}/g" "$OVERLAY/kustomization.yaml" "$OVERLAY/patch-deployment.yaml"
+          kubectl apply -k "$OVERLAY"
+
+      - name: Wait for rollout
+        id: rollout
         run: |
-          CID="${{ steps.send.outputs.command_id }}"
-          for i in $(seq 1 70); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$CID" \
-              --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)
-            case "$STATUS" in
-              Success|Failed|Cancelled|TimedOut) break ;;
-            esac
-            sleep 10
-          done
-
-          # 성공이든 실패든 박스에서 나온 출력을 워크플로 로그에 남긴다.
-          aws ssm get-command-invocation --command-id "$CID" --instance-id "$INSTANCE_ID" \
-            --query '{Status:Status,Out:StandardOutputContent,Err:StandardErrorContent}' --output json \
-            | python3 -c 'import sys, json; d = json.load(sys.stdin); print(d["Status"]); print(d["Out"]); print(d["Err"], file=sys.stderr); sys.exit(0 if d["Status"] == "Success" else 1)'
+          # 새 파드가 readiness 를 통과해야 옛 파드가 내려간다(maxUnavailable 0).
+          # 5분 안에 안 되면 원인을 남기고 이전 ReplicaSet 으로 되돌린다.
+          if kubectl -n "$K8S_NAMESPACE" rollout status deployment/fitset-ai-server --timeout=5m; then
+            exit 0
+          fi
+          kubectl -n "$K8S_NAMESPACE" describe deployment/fitset-ai-server | tail -30 || true
+          kubectl -n "$K8S_NAMESPACE" get pods -l app=fitset-ai-server -o wide || true
+          kubectl -n "$K8S_NAMESPACE" logs -l app=fitset-ai-server --tail=100 --all-containers --prefix || true
+          kubectl -n "$K8S_NAMESPACE" get events --sort-by=.lastTimestamp | tail -20 || true
+          kubectl -n "$K8S_NAMESPACE" rollout undo deployment/fitset-ai-server || true
+          exit 1
 
       - name: Verify through ALB
         run: |
@@ -132,7 +120,7 @@ jobs:
           BUILT_TS: ${{ steps.timer-build.outputs.built }}
           SERVICE: ai-chat-api
           TARGET_URL: https://api-dev.fitset.kro.kr/ai/v1
-          FAILED_STEP: ${{ steps.send.outcome == 'failure' && 'SSM 배포 명령' || steps.exists.outcome == 'failure' && '이미지 확인' || '이미지 빌드·검증' }}
+          FAILED_STEP: ${{ steps.deploy.outcome == 'failure' && 'EKS 배포' || steps.rollout.outcome == 'failure' && '롤아웃(자동 롤백됨)' || steps.exists.outcome == 'failure' && '이미지 확인' || '이미지 빌드·검증' }}
         run: |
           # 웹훅이 없는 레포에서 배포 자체를 실패로 만들지 않는다.
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
