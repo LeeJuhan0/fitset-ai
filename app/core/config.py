@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     aws_region: str = "ap-northeast-2"
 
-    media_cdn_base_url: str = "https://dtcevtkuvdwt9.cloudfront.net"
+    media_cdn_base_url: str = "https://d31w3ih1t93w7x.cloudfront.net"
 
     workout_days: int = 28
 

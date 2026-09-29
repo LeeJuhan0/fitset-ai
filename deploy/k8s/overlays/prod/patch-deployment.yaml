@@ -32,9 +32,6 @@ spec:
               value: fitset-prod-rds.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
             - name: JWT_PUBLIC_KEY_PARAM
               value: /fitset/prod/jwt/public-key
-            # 백엔드 prod 와 같은 종목 미디어 CDN
-            - name: MEDIA_CDN_BASE_URL
-              value: https://d31w3ih1t93w7x.cloudfront.net
             # prod 전용 가드레일이 없어 dev 가드레일(fitset-chat-dev)을 같이 쓴다
             - name: GUARDRAIL_ID
               value: 80ax7xnn2gg1
