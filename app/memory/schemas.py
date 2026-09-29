@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 MAX_ITEMS = 5
 EMPTY_WORDS = {"", "null", "none", "unknown", "없음", "모름", "싫음", "싫어", "싫어함", "싫다", "싶음"}
+LEVEL_WORDS = {"초보", "초보자", "초급", "초급자", "중급", "중급자", "고급", "고급자", "상급", "상급자"}
 
 
 class AvoidedExercise(BaseModel):
@@ -52,7 +53,9 @@ class UserPreferences(BaseModel):
     @field_validator("training_style", mode="before")
     @classmethod
     def _blank_style(cls, value):
-        """null 없음 같은 글자는 빈 값"""
+        """빈 값 글자와 수준 단어는 빈 값"""
+        if isinstance(value, str) and value.strip() in LEVEL_WORDS:
+            return None
         return _blank(value)
 
 
