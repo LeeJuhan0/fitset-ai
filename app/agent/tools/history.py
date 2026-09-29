@@ -113,8 +113,8 @@ _TEMPLATES: dict[str, tuple] = {
 
 
 class QueryWorkoutHistory(BaseModel):
-    """유저의 운동 기록 원본을 조회할 때 쓴다 — 특정 종목의 세트 기록·최고 기록(PR),
-    기간별 세션 요약, 볼륨 상위 종목. 차트가 아니라 수치·상세 내역으로 답할 때 사용한다."""
+    """유저의 운동 기록 원본을 수치와 상세 내역으로 답할 때 쓴다. 특정 종목의 세트 기록, 최고 기록(PR) 수치,
+    기간별 세션 요약, 볼륨 상위 종목이 대상이다. 흐름을 그래프로 보여달라면 DrawChart를 쓴다."""
 
     template: Literal["session_summary", "exercise_sets", "exercise_pr", "volume_by_exercise"] = Field(
         description=(

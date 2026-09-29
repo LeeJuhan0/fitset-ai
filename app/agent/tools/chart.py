@@ -34,7 +34,8 @@ MAX_DAYS = 730
 
 
 class DrawChart(BaseModel):
-    """유저의 기록·추이를 차트로 보여준다. 체중·볼륨·운동 시간·빈도·PR 질문에 쓴다."""
+    """유저 기록의 시간 흐름을 그래프로 보여줄 때 쓴다. 체중 변화, 볼륨 추이, 운동 시간과 빈도 흐름, 종목 PR 추이가 대상이다.
+    그래프 없이 특정 수치나 상세 내역만 물으면 QueryWorkoutHistory를 쓴다."""
 
     metric: Metric = Field(description="그릴 지표")
     days: int = Field(default=DEFAULT_DAYS, ge=7, le=MAX_DAYS, description="조회 기간(일)")

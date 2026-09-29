@@ -16,7 +16,7 @@ logger = logging.getLogger("fitset")
 
 
 class GetExerciseGuide(BaseModel):
-    """특정 운동 종목의 자세·수행 방법을 설명할 때 쓴다. 종목명은 한글로 넣어도 된다."""
+    """특정 운동 종목의 자세와 수행 방법을 물을 때 쓴다. 종목명은 한글로 넣어도 된다."""
 
     exercise: str = Field(
         description="종목 식별자(slug) 또는 한글 종목명. 예: barbell-bench-press, 바벨 벤치프레스",

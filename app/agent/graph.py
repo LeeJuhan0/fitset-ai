@@ -50,7 +50,7 @@ def _model() -> Runnable:
         provider=bedrock.model_provider(settings.llm_model_id),
         region_name=settings.aws_region,
         client=bedrock.chat_runtime(),
-        max_tokens=settings.llm_max_tokens,
+        max_tokens=settings.chat_max_tokens,
         temperature=0.3,
     )
     return model.bind_tools(tools.TOOLS)
