@@ -9,6 +9,7 @@ from app.agent import graph, guardrails, prompts
 from app.chat import repository, utils
 from app.chat.enums import MessageRole, StreamKind
 from app.chat.models import MessageRecord, ThreadRecord
+from app.chat.summary import ThreadSummary, render_thread_summary
 from app.chat.exceptions import (
     ThreadExpiredError,
     ThreadFullError,
@@ -191,8 +192,7 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
         raise RateLimitedError()
     thread = await _load_thread(user_id, thread_id)
 
-    user_summary, recent, total_messages = await asyncio.gather(
-        memory_service.latest_summary(user_id),
+    recent, total_messages = await asyncio.gather(
         asyncio.to_thread(repository.recent_messages, thread_id, settings.chat_context_turns),
         asyncio.to_thread(repository.count_messages, thread_id, None),
     )
@@ -211,7 +211,7 @@ async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
 
     return _Turn(
         user_message=user_message,
-        context=prompts.chat_context(user_summary, thread.summary_text),
+        context=prompts.chat_context(_thread_summary_text(thread)),
         history=[*_to_lc_messages(utils.context_messages(recent)), HumanMessage(content=content)],
         title_task=asyncio.create_task(_make_title(content)) if thread.title is None else None,
     )
@@ -275,17 +275,16 @@ async def refresh_summaries(user_id: str, thread_id: str) -> None:
     if not answered:
         return None
     transcript = "\n".join(f"{item.role}: {item.content or ''}" for item in answered)
-    system, user = prompts.summarize_thread(thread.summary_text, transcript)
-    summary_text = await asyncio.to_thread(bedrock.try_complete, "thread summary", system, user, 600)
-    if summary_text is None:
+    system, user = prompts.summarize_thread(_thread_summary_json(thread), transcript)
+    summary = await asyncio.to_thread(bedrock.try_structured, "thread summary", ThreadSummary, system, user)
+    if summary is None:
         return None
 
-    summary_text = summary_text.strip()
     await asyncio.to_thread(
-        repository.save_summary, user_id, thread_id, summary_text, fresh[-1].message_id
+        repository.save_summary, user_id, thread_id, summary.model_dump(), fresh[-1].message_id
     )
 
-    await memory_service.merge_thread_summary(user_id, thread_id, summary_text, fresh[-1].message_id)
+    await memory_service.merge_preferences(user_id, thread_id, transcript, fresh[-1].message_id)
     return None
 
 
@@ -334,3 +333,26 @@ def _to_lc_messages(items: list[MessageRecord]) -> list:
         else:
             converted.append(HumanMessage(content=text))
     return converted
+
+
+def _thread_summary(thread: ThreadRecord) -> ThreadSummary | None:
+    """저장된 대화방 상태 Map 을 스키마 객체로"""
+    if thread.summary is None:
+        return None
+    return ThreadSummary(**thread.summary.as_dict())
+
+
+def _thread_summary_json(thread: ThreadRecord) -> str | None:
+    """이전 대화방 상태 JSON, 없으면 None"""
+    summary = _thread_summary(thread)
+    if summary is None:
+        return None
+    return summary.model_dump_json()
+
+
+def _thread_summary_text(thread: ThreadRecord) -> str | None:
+    """대화방 상태 채팅 문맥용 문장"""
+    summary = _thread_summary(thread)
+    if summary is None:
+        return None
+    return render_thread_summary(summary)
