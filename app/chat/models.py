@@ -15,7 +15,7 @@ class ThreadRecord(DynamoModel):
     user_id = UnicodeAttribute(hash_key=True)
     thread_id = UnicodeAttribute(range_key=True)
     title = UnicodeAttribute(null=True)
-    summary_text = UnicodeAttribute(null=True)
+    summary = MapAttribute(null=True)
     summary_upto = UnicodeAttribute(null=True)
     last_message_at = UnicodeAttribute(null=True)
     expires_at = NumberAttribute(null=True)

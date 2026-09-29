@@ -83,12 +83,12 @@ def save_turn(
 
 
 @dynamo.storage_errors
-def save_summary(user_id: str, thread_id: str, summary_text: str, summary_upto: str) -> None:
+def save_summary(user_id: str, thread_id: str, summary: dict, summary_upto: str) -> None:
     """스레드 요약과 반영 지점 전진 조건부 갱신"""
     try:
         ThreadRecord(user_id, thread_id).update(
             actions=[
-                ThreadRecord.summary_text.set(summary_text),
+                ThreadRecord.summary.set(summary),
                 ThreadRecord.summary_upto.set(summary_upto),
             ],
             condition=(
