@@ -3,16 +3,18 @@ import logging
 
 from app.clients import bedrock
 from app.rag import prompts
-from app.routines.utils import MUSCLES
+from app.routines.utils import MUSCLE_LABELS_KO, MUSCLES
 
 logger = logging.getLogger("fitset")
 
+MUSCLE_BY_LABEL = {label: muscle for muscle, label in MUSCLE_LABELS_KO.items()}
+
 
 def clean_query_analysis(description: str, avoid_muscles: list[str], unsafe_constraints: list[str]) -> tuple[str | None, set[str], list[str]]:
-    """구조화 분석 결과 정제, 빈 묘사문 None, 허용 부위만"""
+    """분석 결과 정제, 한글 부위 이름을 부위 코드로"""
     if not description.strip():
         return None, set(), []
-    avoid = {muscle for muscle in avoid_muscles if muscle in MUSCLES}
+    avoid = {MUSCLE_BY_LABEL.get(muscle, muscle) for muscle in avoid_muscles} & MUSCLES
     unsafe = [constraint for constraint in unsafe_constraints if constraint.strip()]
     return description.strip(), avoid, unsafe
 
