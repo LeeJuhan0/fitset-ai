@@ -1,11 +1,11 @@
 import asyncio
 import logging
 from functools import lru_cache
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agent import graph, prompts
+from app.agent import graph, guardrails, prompts
 from app.chat import repository, utils
 from app.chat.enums import MessageRole, StreamKind
 from app.chat.models import MessageRecord, ThreadRecord
@@ -29,9 +29,12 @@ from app.clients import bedrock
 from app.core.ulid import new_ulid
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, DomainError, RateLimitedError
+from app.core.schemas import DEFAULT_SCHEME
 from app.memory import service as memory_service
 
 logger = logging.getLogger("fitset")
+
+TOO_LONG_REPLY = "요청은 {limit}자 이내로 입력해주세요."
 
 
 @lru_cache
@@ -112,15 +115,28 @@ class _Turn:
 
 async def send_message_stream(user_id: str, thread_id: str, content: str):
     """메시지 전송 턴 실행 스트림 이벤트 튜플 방출"""
+    max_chars = get_settings().chat_message_max_chars
+    if len(content) > max_chars:
+        async for event in _too_long_events(user_id, thread_id, max_chars):
+            yield event
+        return
     turn = await _begin_turn(user_id, thread_id, content)
+    limit = get_settings().chat_answer_max_chars
 
     result = None
+    sent = ""
+    closed = False
     try:
-        async for kind, value in graph.run_turn_stream(user_id, turn.context, turn.history):
-            if kind == graph.GraphEvent.DELTA:
-                yield StreamKind.DELTA, value
+        async for kind, value in _answer_events(user_id, turn, content):
+            if kind != graph.GraphEvent.DELTA:
+                result = value
                 continue
-            result = value
+            if closed:
+                continue
+            piece, closed = utils.clip_delta(sent, value, limit)
+            sent += piece
+            if piece:
+                yield StreamKind.DELTA, piece
     except Exception:
         logger.exception("agent stream failed")
         result = None
@@ -128,6 +144,7 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
         turn.cancel_title()
         yield StreamKind.ERROR, AiUnavailableError()
         return
+    result = replace(result, content=utils.clip_answer(result.content, limit))
 
     try:
         data = await _persist_answer(user_id, thread_id, result, turn)
@@ -136,6 +153,35 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
         yield StreamKind.ERROR, DomainError()
         return
     yield StreamKind.DONE, data
+
+
+async def _too_long_events(user_id: str, thread_id: str, max_chars: int):
+    """상한 초과 메시지 저장 없이 안내 답변 방출"""
+    thread = await _load_thread(user_id, thread_id)
+    now = clock.now_utc()
+    reply = TOO_LONG_REPLY.format(limit=max_chars)
+    notice = MessageRecord(
+        thread_id=thread_id,
+        message_id=new_ulid(now),
+        user_id=user_id,
+        role=MessageRole.ASSISTANT,
+        content=reply,
+        response_scheme=DEFAULT_SCHEME,
+        created_at=clock.iso_utc(now),
+    )
+    yield StreamKind.DELTA, reply
+    yield StreamKind.DONE, MessageSendData(message=MessageOut(**utils.to_message_view(notice)), thread_title=thread.title)
+
+
+async def _answer_events(user_id: str, turn: _Turn, content: str):
+    """가드레일 차단 템플릿 또는 에이전트 스트림 방출"""
+    reply = await guardrails.screen(content)
+    if reply is not None:
+        yield graph.GraphEvent.DELTA, reply
+        yield graph.GraphEvent.RESULT, graph.AgentResult(reply, DEFAULT_SCHEME, None)
+        return
+    async for event in graph.run_turn_stream(user_id, turn.context, turn.history):
+        yield event
 
 
 async def _begin_turn(user_id: str, thread_id: str, content: str) -> _Turn:
@@ -178,6 +224,8 @@ async def _persist_answer(
     settings = get_settings()
     title = await turn.title()
     answered_at = clock.now_utc()
+    expires_at = utils.ttl_epoch(answered_at, settings.thread_ttl_days)
+    turn.user_message.deleted_at = expires_at
     assistant_message = MessageRecord(
         thread_id=thread_id,
         message_id=new_ulid(answered_at),
@@ -187,6 +235,7 @@ async def _persist_answer(
         response_scheme=result.response_scheme,
         payload=result.payload,
         created_at=clock.iso_utc(answered_at),
+        deleted_at=expires_at,
     )
     await asyncio.to_thread(
         repository.save_turn,
@@ -194,7 +243,7 @@ async def _persist_answer(
         assistant_message,
         user_id,
         clock.iso_utc(answered_at),
-        utils.ttl_epoch(answered_at, settings.thread_ttl_days),
+        expires_at,
         title,
     )
     return MessageSendData(
@@ -258,7 +307,7 @@ async def _purge_thread(user_id: str, thread_id: str) -> None:
     try:
         await asyncio.to_thread(repository.delete_messages, thread_id)
     except DomainError:
-        logger.exception("message purge failed, leaving orphans for batch: %s", thread_id)
+        logger.exception("message purge failed: %s", thread_id)
     return None
 
 

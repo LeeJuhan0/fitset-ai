@@ -5,6 +5,8 @@ from pynamodb.attributes import MapAttribute
 
 from app.chat.enums import MessageRole
 
+SENTENCE_ENDS = (".", "!", "?")
+
 if TYPE_CHECKING:
     from app.chat.models import MessageRecord, ThreadRecord
 
@@ -66,3 +68,21 @@ def to_message_view(message: "MessageRecord") -> dict:
         "payload": None if is_user else _payload_dict(message.payload),
         "created_at": message.created_at or "",
     }
+
+
+def clip_answer(text: str, limit: int) -> str:
+    """글자 상한 내 마지막 문장까지 자르기"""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(mark) for mark in SENTENCE_ENDS)
+    if end < 0:
+        return head.rstrip()
+    return head[:end + 1].rstrip()
+
+
+def clip_delta(sent: str, delta: str, limit: int) -> tuple[str, bool]:
+    """상한 기준 스트림 조각 자르기와 종료 여부"""
+    if len(sent) + len(delta) <= limit:
+        return delta, False
+    return clip_answer(sent + delta, limit)[len(sent):], True

@@ -50,3 +50,4 @@ class MessageRecord(DynamoModel):
     response_scheme = UnicodeAttribute(null=True)
     payload = MapAttribute(null=True)
     created_at = UnicodeAttribute(null=True)
+    deleted_at = NumberAttribute(null=True)
