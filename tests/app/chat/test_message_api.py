@@ -11,6 +11,7 @@ from app.chat.models import MessageRecord, ThreadRecord
 from app.core.config import Settings
 from app.exercises.models import Exercise
 from app.memory import service as memory_service
+from app.chat.summary import CurrentRequest, ThreadSummary
 from app.memory.schemas import UserPreferences
 from tests.conftest import USER_ID
 
@@ -188,16 +189,17 @@ async def test_대화가_길어지면_대화_요약과_사용자_장기_요약�
     llm: SimpleNamespace,
 ):
     chat_model.append(AIMessage(content="오늘은 쉬어도 좋아요"))
-    llm.text = "하체 위주로 운동하며 휴식 여부를 상담함"
+    state = ThreadSummary(current_request=CurrentRequest(text="오늘 휴식 여부", status="done"), decisions=["오늘은 휴식"])
+    llm.structured[ThreadSummary] = state
     llm.structured[UserPreferences] = UserPreferences(preferred_exercises=["바벨 스쿼트"])
-    payload = {"content": "오늘 쉬어도 될까?"}
+    payload = {"content": "바벨 스쿼트 좋아하는데 오늘은 쉬어도 될까?"}
 
     auth_client.post(_messages_url(thread), json=payload)
 
     saved = ThreadRecord.get(USER_ID, thread.thread_id)
-    assert saved.summary_text == "하체 위주로 운동하며 휴식 여부를 상담함"
+    assert ThreadSummary(**saved.summary.as_dict()) == state
     assert saved.summary_upto is not None
-    assert await memory_service.latest_summary(USER_ID) == "선호 종목: 바벨 스쿼트"
+    assert await memory_service.latest_preferences(USER_ID) == UserPreferences(preferred_exercises=["바벨 스쿼트"])
 
 
 @pytest.mark.usefixtures("llm")

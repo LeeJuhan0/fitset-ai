@@ -6,7 +6,7 @@ import pytest
 from app.core.config import Settings
 from app.rag import pipeline, retrieve
 from app.rag.prompts import PickedRoutine
-from app.rag.retrieve import SearchFilters
+from app.rag.retrieve import SearchFilters, without_excluded
 
 RULE_PASSED = ["leg-best", "leg-second", "leg-hamstring", "home-leg", "leg-no-minutes"]
 
@@ -95,3 +95,19 @@ async def test_루틴_검색은_룰_필터를_통과한_후보가_없으면_없�
     routine = await pipeline.find_routine("종아리 루틴", filters, set())
 
     assert routine is None
+
+
+def test_기피_거절_종목이_든_루틴은_부분_일치로_뺀다():
+    rows = [
+        {"slug": "a", "exercise_names": ["덤벨 런지", "바벨 스쿼트"]},
+        {"slug": "b", "exercise_names": ["바벨 스쿼트", "레그 컬"]},
+    ]
+
+    assert [row["slug"] for row in without_excluded(rows, ("런지",))] == ["b"]
+    assert without_excluded(rows, ()) == rows
+
+
+def test_제외하면_후보가_비는_경우는_원본을_그대로_쓴다():
+    rows = [{"slug": "a", "exercise_names": ["덤벨 런지"]}]
+
+    assert without_excluded(rows, ("런지",)) == rows

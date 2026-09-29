@@ -1,5 +1,6 @@
 import pytest
 
+from app.memory.schemas import AvoidedExercise, Environment, RejectedExercise, UserPreferences
 from app.routines import utils
 
 
@@ -136,3 +137,22 @@ def test_워밍업_무게는_본_세트_절반이고_장비_최소_무게를_보
     warmup = utils.warmup_weight(slug, weight, equipment)
 
     assert warmup == expected
+
+
+def test_운동_편향의_기피와_거절_종목을_중복_없이_모은다():
+    preferences = UserPreferences(
+        avoided_exercises=[AvoidedExercise(name="버피")],
+        rejected_exercises=[RejectedExercise(name="런지", reason="무릎"), RejectedExercise(name="버피", reason="힘듦")],
+    )
+
+    assert utils.excluded_exercises(preferences) == ("버피", "런지")
+    assert utils.excluded_exercises(None) == ()
+
+
+def test_요청_문맥_뒤에_운동_편향_문장을_덧붙인다():
+    preferences = UserPreferences(preferred_exercises=["바벨 데드리프트"], environment=Environment(place="home"))
+
+    assert utils.preference_context("무릎이 좀 아파요", preferences) == "무릎이 좀 아파요\n선호 종목: 바벨 데드리프트\n운동 환경: 집"
+    assert utils.preference_context(None, None) is None
+    assert utils.prefers_home(preferences) is True
+    assert utils.prefers_home(None) is False

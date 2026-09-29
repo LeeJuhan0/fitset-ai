@@ -25,8 +25,10 @@ def test_정보가_없는_이유와_빈_값_글자는_비운다():
         environment=Environment(place="unknown"),
         training_style="null",
     )
+    leveled = UserPreferences(training_style="중급자")
 
     assert preferences.avoided_exercises[0].reason is None
     assert preferences.environment.place is None
     assert preferences.training_style is None
+    assert leveled.training_style is None
     assert render_preferences(preferences) == "기피 종목: 버피"
