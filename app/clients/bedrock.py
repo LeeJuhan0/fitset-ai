@@ -112,6 +112,28 @@ def try_complete(purpose: str, system: str, user: str, max_tokens: int | None = 
         return None
 
 
+def apply_guardrail(text: str) -> dict:
+    """유저 입력 Bedrock 가드레일 평가 응답 반환"""
+    settings = get_settings()
+    return chat_runtime().apply_guardrail(
+        guardrailIdentifier=settings.guardrail_id,
+        guardrailVersion=settings.guardrail_version,
+        source="INPUT",
+        content=[{"text": {"text": text}}],
+    )
+
+
+def classify(model_id: str, system: str, text: str) -> str:
+    """분류용 단답 Converse 호출 후 텍스트 반환"""
+    response = chat_runtime().converse(
+        modelId=model_id,
+        system=[{"text": system}],
+        messages=[{"role": "user", "content": [{"text": text}]}],
+        inferenceConfig={"maxTokens": 3, "temperature": 0},
+    )
+    return response["output"]["message"]["content"][0]["text"].strip()
+
+
 def embed_query(text: str) -> list[float]:
     """검색 쿼리 1건 Cohere 임베딩 벡터 생성"""
     settings = get_settings()

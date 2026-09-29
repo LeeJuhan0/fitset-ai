@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     embed_dimension: int = 1024
     llm_model_id: str = "global.amazon.nova-2-lite-v1:0"
     llm_max_tokens: int = 1024
+    chat_max_tokens: int = 450
+    chat_answer_max_chars: int = 500
+    chat_message_max_chars: int = 500
 
     chat_threads_table: str = "chat_threads"
     chat_messages_table: str = "chat_messages"
@@ -69,6 +72,9 @@ class Settings(BaseSettings):
     bodyweight_home_ratio: float = 0.7
 
     guardrail_block_unsafe: bool = True
+    guardrail_id: str = ""
+    guardrail_version: str = "3"
+    scope_model_id: str = ""
 
 
 @lru_cache
