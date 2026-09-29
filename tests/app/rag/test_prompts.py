@@ -23,13 +23,13 @@ def test_묘사문_변환_프롬프트는_문맥이_없으면_빈_태그를_둔�
 def test_템플릿_묘사문은_부위_수준_목표_시간으로_조립한다():
     description = prompts.fallback_description("weightLoss", "intermediate", ["chest", "triceps"], 45)
 
-    assert description == "가슴, 삼두근 중심의 중급 체중감량 운동 루틴, 약 45분."
+    assert description == "가슴, 삼두근 부위를 단련하는 중급 45분 체중감량 루틴입니다."
 
 
 def test_템플릿_묘사문은_라벨이_없는_값을_그대로_쓴다():
     description = prompts.fallback_description("power", "expert", ["neck"], 30)
 
-    assert description == "neck 중심의 expert power 운동 루틴, 약 30분."
+    assert description == "neck 부위를 단련하는 expert 30분 power 루틴입니다."
 
 
 def test_최종_선택_프롬프트는_후보에_번호를_매겨_요약한다(candidates: list[dict]):

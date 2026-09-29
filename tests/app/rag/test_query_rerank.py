@@ -8,7 +8,7 @@ from app.core.exceptions import AiUnavailableError
 from app.rag import embed, query, rerank
 from app.rag.prompts import PickedRoutine, QueryAnalysis
 
-FALLBACK = "대퇴사두근 중심의 초급 근비대 운동 루틴, 약 60분."
+FALLBACK = "대퇴사두근 부위를 단련하는 초급 60분 근비대 루틴입니다."
 
 
 def _analyze():
@@ -18,7 +18,7 @@ def _analyze():
 
 async def test_요청_분석은_LLM_묘사문과_허용_기피_부위_안전_제약을_준다(llm: SimpleNamespace):
     llm.structured[QueryAnalysis] = QueryAnalysis(
-        description=" 스쿼트 위주 하체 루틴 ", avoid_muscles=["hamstrings", "knee"], unsafe_constraints=["점프 금지", " "],
+        description=" 스쿼트 위주 하체 루틴 ", avoid_muscles=["햄스트링", "무릎"], unsafe_constraints=["점프 금지", " "],
     )
 
     result = await _analyze()
