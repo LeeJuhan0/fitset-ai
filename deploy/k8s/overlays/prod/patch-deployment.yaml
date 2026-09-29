@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fitset-ai-server
+spec:
+  template:
+    metadata:
+      labels:
+        tags.datadoghq.com/env: prod
+        tags.datadoghq.com/version: IMAGE_TAG
+    spec:
+      nodeSelector:
+        pool: prod
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: prod
+          effect: NoSchedule
+      containers:
+        - name: fitset-ai-server
+          env:
+            # prod DynamoDB 는 접미사 없는 이름이다(기본값과 같지만 환경이 드러나게 적어 둔다).
+            - name: CHAT_THREADS_TABLE
+              value: chat_threads
+            - name: CHAT_MESSAGES_TABLE
+              value: chat_messages
+            - name: USER_SUMMARIES_TABLE
+              value: user_summaries
+            - name: PG_HOST
+              value: fitset-prod-pgvector.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+            - name: MYSQL_HOST
+              value: fitset-prod-rds.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+            - name: JWT_PUBLIC_KEY_PARAM
+              value: /fitset/prod/jwt/public-key
+            # 백엔드 prod 와 같은 종목 미디어 CDN
+            - name: MEDIA_CDN_BASE_URL
+              value: https://d31w3ih1t93w7x.cloudfront.net
+            # prod 전용 가드레일이 없어 dev 가드레일(fitset-chat-dev)을 같이 쓴다
+            - name: GUARDRAIL_ID
+              value: 80ax7xnn2gg1
+            - name: GUARDRAIL_VERSION
+              value: "3"
+            - name: SCOPE_MODEL_ID
+              value: global.amazon.nova-2-lite-v1:0
