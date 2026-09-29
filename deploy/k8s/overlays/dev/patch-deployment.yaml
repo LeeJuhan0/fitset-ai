@@ -27,3 +27,11 @@ spec:
               value: fitset-dev-rds.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
             - name: JWT_PUBLIC_KEY_PARAM
               value: /fitset/dev/jwt/public-key
+            # Bedrock 가드레일 fitset-chat-dev, 유저 입력을 에이전트 전에 검사한다
+            - name: GUARDRAIL_ID
+              value: 80ax7xnn2gg1
+            - name: GUARDRAIL_VERSION
+              value: "3"
+            # 운동, 식단, 건강 밖의 질문을 막는 범위 판정 모델, 가드레일과 동시에 돈다
+            - name: SCOPE_MODEL_ID
+              value: global.amazon.nova-2-lite-v1:0
