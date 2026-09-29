@@ -85,3 +85,52 @@ class MarkdownStreamFilter:
         """스트림 종료, 보류분 정제해 반환"""
         rest, self._pending = self._pending, ""
         return self._emit(rest)
+
+
+INTERNAL_TAGS = ("thread_summary", "user_summary", "user_context")
+_INTERNAL_BLOCK = re.compile(r"<(" + "|".join(INTERNAL_TAGS) + r")>.*?(?:</\1>|\Z)", re.S)
+
+
+def strip_internal_blocks(text: str) -> str:
+    """답변에 새어 나온 내부 문맥 태그 블록 제거"""
+    return _INTERNAL_BLOCK.sub("", text)
+
+
+class InternalBlockFilter:
+    """스트리밍 조각에서 내부 문맥 블록 제거, 태그 판단 전까지 보류"""
+
+    def __init__(self):
+        """보류 버퍼 초기화"""
+        self._pending = ""
+
+    def feed(self, chunk: str) -> str:
+        """조각 투입, 내부 블록을 뺀 확정분 반환"""
+        self._pending += chunk
+        out = []
+        while self._pending:
+            start = self._pending.find("<")
+            if start == -1:
+                out.append(self._pending)
+                self._pending = ""
+                break
+            out.append(self._pending[:start])
+            rest = self._pending[start:]
+            tag = next((name for name in INTERNAL_TAGS if rest.startswith(f"<{name}>")), None)
+            if tag is not None:
+                close = rest.find(f"</{tag}>")
+                if close == -1:
+                    self._pending = rest
+                    break
+                self._pending = rest[close + len(tag) + 3:]
+                continue
+            if any(f"<{name}>".startswith(rest) for name in INTERNAL_TAGS):
+                self._pending = rest
+                break
+            out.append("<")
+            self._pending = rest[1:]
+        return "".join(out)
+
+    def flush(self) -> str:
+        """스트림 종료, 닫히지 않은 내부 블록은 버림"""
+        rest, self._pending = self._pending, ""
+        return strip_internal_blocks(rest)

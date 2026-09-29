@@ -1,6 +1,6 @@
 import pytest
 
-from app.agent.markdown import LINK_HOLD_LIMIT, MarkdownStreamFilter, strip_markdown
+from app.agent.markdown import InternalBlockFilter, LINK_HOLD_LIMIT, MarkdownStreamFilter, strip_internal_blocks, strip_markdown
 
 
 def _stream(text: str, size: int) -> str:
@@ -132,3 +132,29 @@ def test_스트리밍_필터는_종료_시_보류분을_내보내고_비운다()
     rest = stream_filter.flush()
 
     assert (rest, stream_filter.flush()) == ("*", "")
+
+
+def _stream_blocks(chunks: list[str]) -> str:
+    """조각을 내부 블록 필터에 차례로 넣은 전체 출력"""
+    blocks = InternalBlockFilter()
+    return "".join(blocks.feed(chunk) for chunk in chunks) + blocks.flush()
+
+
+def test_답변에_새어_나온_대화방_상태_블록을_지운다():
+    text = "그래프로 보여드릴게요. <thread_summary>진행 중인 요청: PR 확인</thread_summary>"
+
+    assert strip_internal_blocks(text) == "그래프로 보여드릴게요. "
+
+
+def test_쪼개져_들어온_내부_블록도_스트림에서_지운다():
+    chunks = ["보여드릴게요. <thr", "ead_summ", "ary>진행 중인 요청", "</thread_sum", "mary> 끝"]
+
+    assert _stream_blocks(chunks) == "보여드릴게요.  끝"
+
+
+def test_내부_태그가_아닌_부등호는_그대로_보낸다():
+    assert _stream_blocks(["세트 수 5 <", " 10 이면 ", "<b>굵게</b>"]) == "세트 수 5 < 10 이면 <b>굵게</b>"
+
+
+def test_닫히지_않은_내부_블록은_끝까지_버린다():
+    assert _stream_blocks(["좋아요 <thread_summary>합의한 결정: 하체"]) == "좋아요 "
