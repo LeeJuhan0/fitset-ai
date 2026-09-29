@@ -13,8 +13,7 @@ class UserSummaryRecord(DynamoModel):
 
     user_id = UnicodeAttribute(hash_key=True)
     summary_id = UnicodeAttribute(range_key=True)
-    summary_text = UnicodeAttribute(null=True)
-    personality = MapAttribute(null=True)
+    preferences = MapAttribute(null=True)
     created_at = UnicodeAttribute()
     source_thread_id = UnicodeAttribute(null=True)
     source_upto = UnicodeAttribute(null=True)
@@ -23,18 +22,16 @@ class UserSummaryRecord(DynamoModel):
     def new(
         cls,
         user_id: str,
-        summary_text: str,
+        preferences: dict,
         now: datetime,
         source_thread_id: str,
         source_upto: str,
-        personality: dict | None = None,
     ) -> "UserSummaryRecord":
-        """생성 시각 ULID 정렬 키 포함 새 요약 이력 조립"""
+        """새 운동 편향 이력 ULID 정렬 키로 조립"""
         return cls(
             user_id=user_id,
             summary_id=new_ulid(now),
-            summary_text=summary_text,
-            personality=personality,
+            preferences=preferences,
             created_at=iso_utc(now),
             source_thread_id=source_thread_id,
             source_upto=source_upto,

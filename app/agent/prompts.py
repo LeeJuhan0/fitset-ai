@@ -39,13 +39,14 @@ SUMMARY_SYSTEM = """당신은 운동 상담 대화를 다음 턴의 문맥으로
 4. 새 사실을 만들어내지 마세요.
 """
 
-USER_SUMMARY_SYSTEM = """당신은 유저의 장기 프로필 요약을 갱신하는 도우미입니다.
+USER_SUMMARY_SYSTEM = """당신은 대화에서 유저의 운동 편향을 뽑아 UserPreferences 로 갱신하는 도우미입니다.
 
 다음 원칙을 지켜주세요:
-1. 기존 요약과 새 대화를 병합하되, 반복 확인된 선호, 목표, 제약만 남기고 일회성 대화는 버려주세요.
-2. 일시적 오류, 서버 장애, 계정 연결 안내 같은 시스템 상태 언급은 프로필이 아니므로 넣지 않습니다. 기존 요약에 있더라도 지워주세요.
-3. 한국어 300자 이내 평문으로 씁니다.
-4. 새 사실을 만들어내지 마세요.
+1. 기존 편향과 새 대화 요약을 병합합니다. 새 대화가 기존 값과 부딪히면 새 대화를 따르고, 반대 항목에서 지웁니다.
+2. 유저가 직접 말한 것만 넣습니다. 대화에 나오지 않은 항목은 비워 두고, 장소나 장비를 추측하지 마세요.
+3. 운동 목표 분류, 수준, 나이, 체중, 통증과 부상, 운동 시간과 빈도, 운동 기록 수치는 다른 곳에서 받으므로 넣지 않습니다.
+4. 종목명은 한국어로, 목록은 항목마다 최근 것부터 5개 이하로 남깁니다.
+5. 일시적 오류, 서버 장애, 계정 안내 같은 시스템 상태는 넣지 않습니다.
 """
 
 SCOPE_SYSTEM = """당신은 운동 앱 FitSet 채팅의 입력 분류기입니다. <message> 태그 안의 유저 메시지를 세 가지 중 하나로 분류합니다.
@@ -86,10 +87,10 @@ def summarize_thread(previous_summary: str | None, transcript: str) -> tuple[str
     return SUMMARY_SYSTEM, user
 
 
-def summarize_user(previous_summary: str | None, thread_summary: str) -> tuple[str, str]:
-    """유저 장기 요약 증분 병합 프롬프트"""
+def summarize_user(previous_preferences: str | None, thread_summary: str) -> tuple[str, str]:
+    """유저 운동 편향 증분 병합 프롬프트"""
     user = (
-        f"<previous_summary>{previous_summary or '(없음)'}</previous_summary>\n"
+        f"<previous_preferences>{previous_preferences or '(없음)'}</previous_preferences>\n"
         f"<recent_thread>{thread_summary}</recent_thread>"
     )
     return USER_SUMMARY_SYSTEM, user
