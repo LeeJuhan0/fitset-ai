@@ -100,7 +100,7 @@ class InternalBlockFilter:
     """스트리밍 조각에서 내부 문맥 블록 제거, 태그 판단 전까지 보류"""
 
     def __init__(self):
-        """보류 버퍼 초기화"""
+        """판단 보류 중인 버퍼 초기화"""
         self._pending = ""
 
     def feed(self, chunk: str) -> str:
