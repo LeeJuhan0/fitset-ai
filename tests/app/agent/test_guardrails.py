@@ -1,12 +1,15 @@
 import pytest
 from botocore.exceptions import ClientError
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agent.guardrails import (
     BLOCKED_REPLIES,
     CAPABILITY_REPLY,
     HARMFUL_REPLY,
     OFF_TOPIC_REPLY,
+    PrescriptionHold,
     enforce_scheme_contract,
+    invents_routine,
     scope_label,
     screen,
     screen_input,
@@ -148,3 +151,32 @@ async def test_가드레일이_막으면_가드레일_이유의_답변이_우선
 
 async def test_둘_다_통과하면_에이전트로_넘긴다(guardrail, scope):
     assert await screen("오늘 하체 뭐 할까?") is None
+
+
+@pytest.mark.parametrize("answer", ["벤치프레스 4세트 해요", "8-12회 반복", "12회 반복하세요"])
+def test_도구_없이_세트_횟수를_처방하면_지어낸_루틴이다(answer):
+    assert invents_routine([HumanMessage("가슴 루틴"), AIMessage(answer)])
+
+
+@pytest.mark.parametrize("answer", ["주 3회 운동하면 좋아요", "50분이면 충분해요"])
+def test_세트_횟수_처방이_없으면_지어낸_루틴이_아니다(answer):
+    assert not invents_routine([HumanMessage("질문"), AIMessage(answer)])
+
+
+def test_이번_턴에_도구를_거친_답변은_지어낸_루틴이_아니다():
+    messages = [HumanMessage("가슴 루틴"), AIMessage("", tool_calls=[{"name": "RecommendRoutine", "args": {}, "id": "c"}]),
+                ToolMessage("루틴", tool_call_id="c"), AIMessage("벤치프레스 4세트예요")]
+
+    assert not invents_routine(messages)
+
+
+def test_보류는_첫_숫자부터_판정까지_잡아_둔다():
+    hold = PrescriptionHold()
+
+    assert hold.feed("추천해요. 벤치 ") == "추천해요. 벤치 "
+    assert hold.feed("4세트 ") == ""
+    assert hold.feed("해요") == ""
+    assert hold.release() == "4세트 해요"
+    assert hold.feed("다음 3") == "다음 "
+    hold.drop()
+    assert hold.release() == ""

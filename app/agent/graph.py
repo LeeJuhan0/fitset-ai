@@ -2,10 +2,10 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AnyMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -21,6 +21,7 @@ logger = logging.getLogger("fitset")
 
 AGENT_NODE = "agent"
 CACHE_POINT = {"cachePoint": {"type": "default"}}
+GUARD_NODE = "guard"
 TOOLS_NODE = "tools"
 
 
@@ -32,6 +33,7 @@ class GraphEvent(StrEnum):
 class ChatState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_id: str
+    force_routine: NotRequired[bool]
 
 
 @dataclass(frozen=True)
@@ -42,10 +44,10 @@ class AgentResult:
 
 
 @lru_cache
-def _model() -> Runnable:
-    """툴 바인딩된 Bedrock 채팅 모델 전역 싱글턴"""
+def _chat_model() -> ChatBedrockConverse:
+    """Bedrock 채팅 모델 전역 싱글턴"""
     settings = get_settings()
-    model = ChatBedrockConverse(
+    return ChatBedrockConverse(
         model=settings.llm_model_id,
         provider=bedrock.model_provider(settings.llm_model_id),
         region_name=settings.aws_region,
@@ -53,13 +55,31 @@ def _model() -> Runnable:
         max_tokens=settings.chat_max_tokens,
         temperature=0.3,
     )
-    return model.bind_tools(tools.TOOLS)
+
+
+@lru_cache
+def _model() -> Runnable:
+    """툴 바인딩된 채팅 모델 전역 싱글턴"""
+    return _chat_model().bind_tools(tools.TOOLS)
+
+
+@lru_cache
+def _routine_model() -> Runnable:
+    """루틴 도구 호출을 강제한 채팅 모델"""
+    return _chat_model().bind_tools(tools.TOOLS, tool_choice=guardrails.ROUTINE_TOOL)
 
 
 async def _agent_node(state: ChatState) -> dict:
     """모델 호출로 답변 또는 툴콜 수신"""
-    response = await _model().ainvoke(state["messages"])
-    return {"messages": [response]}
+    model = _routine_model() if state.get("force_routine") else _model()
+    response = await model.ainvoke(state["messages"])
+    return {"messages": [response], "force_routine": False}
+
+
+def _guard_node(state: ChatState) -> dict:
+    """지어낸 루틴 답변 제거 후 도구 강제"""
+    logger.warning("agent wrote a routine without the tool, retrying with it")
+    return {"messages": [RemoveMessage(id=state["messages"][-1].id)], "force_routine": True}
 
 
 def tool_node() -> ToolNode:
@@ -73,9 +93,9 @@ def _tool_turns(messages: list[AnyMessage]) -> int:
 
 
 def _route(state: ChatState) -> str:
-    """툴콜 유무와 왕복 상한으로 다음 노드 결정"""
+    """툴콜 유무, 왕복 상한, 지어낸 루틴으로 다음 노드 결정"""
     if not getattr(state["messages"][-1], "tool_calls", None):
-        return END
+        return GUARD_NODE if guardrails.invents_routine(state["messages"]) else END
     if _tool_turns(state["messages"]) > get_settings().agent_max_tool_turns:
         logger.warning("tool turn limit reached, ending turn")
         return END
@@ -88,8 +108,10 @@ def _graph() -> CompiledStateGraph:
     builder = StateGraph(ChatState)
     builder.add_node(AGENT_NODE, _agent_node)
     builder.add_node(TOOLS_NODE, tool_node())
+    builder.add_node(GUARD_NODE, _guard_node)
     builder.add_edge(START, AGENT_NODE)
-    builder.add_conditional_edges(AGENT_NODE, _route, {TOOLS_NODE: TOOLS_NODE, END: END})
+    builder.add_conditional_edges(AGENT_NODE, _route, {TOOLS_NODE: TOOLS_NODE, GUARD_NODE: GUARD_NODE, END: END})
+    builder.add_edge(GUARD_NODE, AGENT_NODE)
     builder.add_edge(TOOLS_NODE, AGENT_NODE)
     return builder.compile()
 
@@ -183,23 +205,37 @@ async def run_turn(user_id: str, context: str | None, history: list[AnyMessage])
     return _finalize(state)
 
 
+def _judge_held(hold: guardrails.PrescriptionHold, messages: list[AnyMessage]) -> str:
+    """모델 응답 완료 시 보류분 방출 또는 폐기"""
+    if messages[-1].type != "ai":
+        return ""
+    if guardrails.invents_routine(messages):
+        hold.drop()
+        return ""
+    return hold.release()
+
+
 async def run_turn_stream(user_id: str, context: str | None, history: list[AnyMessage]):
     """대화 한 턴 스트리밍 실행 본문 조각과 최종 결과 방출"""
     inputs = _initial_state(user_id, context, history)
     final_state: dict = {}
     markdown = MarkdownStreamFilter()
     internal = InternalBlockFilter()
+    hold = guardrails.PrescriptionHold()
     async for mode, data in _graph().astream(inputs, stream_mode=["messages", "values"]):
         if mode == "values":
             final_state = data
+            released = _judge_held(hold, data["messages"])
+            if released:
+                yield GraphEvent.DELTA, released
             continue
         chunk, metadata = data
         if metadata.get("langgraph_node") != AGENT_NODE:
             continue
-        text = markdown.feed(internal.feed(_chunk_text(chunk)))
+        text = hold.feed(markdown.feed(internal.feed(_chunk_text(chunk))))
         if text:
             yield GraphEvent.DELTA, text
-    tail = markdown.feed(internal.flush()) + markdown.flush()
+    tail = hold.feed(markdown.feed(internal.flush()) + markdown.flush()) + hold.release()
     if tail:
         yield GraphEvent.DELTA, tail
     _log_usage(final_state)

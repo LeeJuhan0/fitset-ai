@@ -92,6 +92,28 @@ async def test_종목_설명을_요청하면_가이드_영상_정보를_함께_�
     assert message["payload"]["videoUrl"] == f"{settings.media_cdn_base_url}/videos/barbell-squat.mp4"
 
 
+@pytest.mark.usefixtures("llm", "barbell_squat")
+async def test_도구_없이_지어낸_루틴은_보내지_않고_도구를_거친_답변만_보낸다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+):
+    tool_call = {"name": "GetExerciseGuide", "args": {"exercise": "바벨 스쿼트"}, "id": "call-1", "type": "tool_call"}
+    chat_model.extend([
+        AIMessage(content="추천해요. 바벨 스쿼트 4세트 8-12회 반복하세요"),
+        AIMessage(content="", tool_calls=[tool_call]),
+        AIMessage(content="루틴을 준비했어요"),
+    ])
+
+    response = auth_client.post(_messages_url(thread), json={"content": "중급자 50분 하체"})
+
+    events = _events(response.text)
+    streamed = "".join(data["text"] for kind, data in events if kind == "delta")
+    assert "세트" not in streamed
+    assert streamed.endswith("루틴을 준비했어요")
+    assert events[-1][1]["message"]["content"] == "루틴을 준비했어요"
+
+
 async def test_만료된_대화에는_메시지를_보낼_수_없다(
     auth_client: TestClient,
     expired_thread: ThreadRecord,

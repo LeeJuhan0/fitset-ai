@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import re
+
+from langchain_core.messages import AnyMessage
 
 from app.agent import prompts
 from app.clients import bedrock
@@ -18,6 +21,50 @@ BLOCKED_REPLIES = {
 }
 SCOPE_REPLIES = {"OUT": OFF_TOPIC_REPLY, "ABOUT": CAPABILITY_REPLY}
 HARMFUL_REPLY = "그 요청에는 답하지 않을게요. 운동이나 건강 이야기라면 언제든 물어봐 주세요."
+ROUTINE_TOOL = "RecommendRoutine"
+PRESCRIPTION = re.compile(r"\d+\s*세트|\d+\s*[-~]\s*\d+\s*회|\d+\s*회\s*반복")
+DIGIT = re.compile(r"\d")
+
+
+def invents_routine(messages: list[AnyMessage]) -> bool:
+    """도구 없이 세트 횟수를 처방한 답변 판정"""
+    last = messages[-1]
+    if last.type != "ai" or getattr(last, "tool_calls", None):
+        return False
+    for message in reversed(messages[:-1]):
+        if message.type == "human":
+            break
+        if message.type == "tool":
+            return False
+    return bool(PRESCRIPTION.search(last.text))
+
+
+class PrescriptionHold:
+    """숫자부터 답변 판정 전까지 스트림 보류"""
+
+    def __init__(self):
+        """보류 중인 답변 조각 버퍼 초기화"""
+        self._held = ""
+
+    def feed(self, text: str) -> str:
+        """조각 투입, 첫 숫자 이전 확정분 반환"""
+        if self._held:
+            self._held += text
+            return ""
+        match = DIGIT.search(text)
+        if match is None:
+            return text
+        self._held = text[match.start():]
+        return text[:match.start()]
+
+    def release(self) -> str:
+        """판정 통과한 보류분 전부 반환"""
+        held, self._held = self._held, ""
+        return held
+
+    def drop(self) -> None:
+        """지어낸 루틴으로 판정된 보류분 폐기"""
+        self._held = ""
 
 
 def enforce_scheme_contract(
