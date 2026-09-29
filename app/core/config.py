@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     pg_password: str = ""
     pg_database: str = "fitset"
     pg_connect_timeout: int = 2
-    pg_statement_timeout: float = 2.0
+    pg_statement_timeout: float = 5.0
     pg_pool_max: int = 5
 
     jwt_public_key_param: str = "/fitset/dev/jwt/public-key"
