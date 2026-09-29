@@ -5,9 +5,10 @@ from functools import lru_cache
 from app.clients import postgres
 from app.core.ratelimit import RateLimiter
 from app.core.config import get_settings
-from app.core.exceptions import AiUnavailableError, RateLimitedError
+from app.core.exceptions import AiUnavailableError, DomainError, RateLimitedError
 from app.exercises import repository as exercise_catalog
 from app.memory import service as memory_service
+from app.memory.schemas import UserPreferences
 from app.rag import pipeline, query
 from app.rag.retrieve import SearchFilters
 from app.routines import utils
@@ -40,7 +41,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
 
     profile, preferences = await asyncio.gather(
         asyncio.to_thread(users_repository.get_profile, user_id),
-        memory_service.latest_preferences(user_id),
+        _latest_preferences(user_id),
     )
     goal = profile.get("goal") or utils.DEFAULT_GOAL
     context = utils.preference_context(request.context, preferences)
@@ -75,6 +76,15 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     routine = chosen["body"]
 
     return _build_response(routine, request, stats, meta)
+
+
+async def _latest_preferences(user_id: str) -> UserPreferences | None:
+    """운동 편향 조회, 저장소 실패면 편향 없이"""
+    try:
+        return await memory_service.latest_preferences(user_id)
+    except DomainError:
+        logger.warning("preferences lookup failed, recommending without them", exc_info=True)
+        return None
 
 
 def _build_set(

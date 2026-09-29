@@ -156,3 +156,16 @@ def test_요청_문맥_뒤에_운동_편향_문장을_덧붙인다():
     assert utils.preference_context(None, None) is None
     assert utils.prefers_home(preferences) is True
     assert utils.prefers_home(None) is False
+
+
+async def test_운동_편향_조회가_실패하면_편향_없이_추천한다(monkeypatch):
+    from app.core.exceptions import DomainError
+    from app.memory import service as memory_service
+    from app.routines import service
+
+    async def fail(user_id):
+        raise DomainError()
+
+    monkeypatch.setattr(memory_service, "latest_preferences", fail)
+
+    assert await service._latest_preferences("user") is None

@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.memory import service as memory_service
 from app.routines.models import Routine
 
 
@@ -99,3 +100,12 @@ def weight_workouts() -> list[dict]:
             ],
         },
     ]
+
+
+@pytest.fixture(autouse=True)
+def no_preferences(monkeypatch):
+    """루틴 테스트는 운동 편향 없이, 실제 DynamoDB 접근 차단"""
+    async def none(user_id: str):
+        return None
+
+    monkeypatch.setattr(memory_service, "latest_preferences", none)
