@@ -196,3 +196,98 @@ async def test_대화가_길어지면_대화_요약과_사용자_장기_요약�
     assert saved.summary_text == "하체 위주로 운동하며 휴식 여부를 상담함"
     assert saved.summary_upto is not None
     assert memory_repository.get_user_summary(USER_ID) == "하체 위주로 운동하며 휴식 여부를 상담함"
+
+
+@pytest.mark.usefixtures("llm")
+async def test_운동과_무관한_요청은_에이전트_없이_짧은_안내로_답하고_기록에_남긴다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+    monkeypatch,
+    settings: Settings,
+):
+    from app.agent.guardrails import OFF_TOPIC_REPLY
+    from app.clients import bedrock
+
+    monkeypatch.setattr(settings, "scope_model_id", "scope-test")
+    monkeypatch.setattr(bedrock, "classify", lambda model_id, system, text: "OUT")
+
+    response = auth_client.post(_messages_url(thread), json={"content": "지금 비트코인 사도 돼?"})
+
+    events = _events(response.text)
+    assert [data["text"] for kind, data in events if kind == "delta"] == [OFF_TOPIC_REPLY]
+    kind, done = events[-1]
+    assert kind == "done" and done["message"]["content"] == OFF_TOPIC_REPLY
+    assert chat_model == []
+    saved = repository.recent_messages(thread.thread_id, 10)
+    assert [m.content for m in saved] == ["지금 비트코인 사도 돼?", OFF_TOPIC_REPLY]
+
+
+@pytest.mark.usefixtures("llm")
+async def test_메시지가_500자를_넘으면_안내_답변만_보내고_두_메시지_모두_저장하지_않는다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+):
+    response = auth_client.post(_messages_url(thread), json={"content": "가" * 501})
+
+    assert response.status_code == status.HTTP_200_OK
+    events = _events(response.text)
+    assert [data["text"] for kind, data in events if kind == "delta"] == ["요청은 500자 이내로 입력해주세요."]
+    kind, done = events[-1]
+    assert kind == "done" and done["message"]["content"] == "요청은 500자 이내로 입력해주세요."
+    assert done["threadTitle"] is None
+    assert chat_model == []
+    assert repository.recent_messages(thread.thread_id, 10) == []
+    assert "가" * 501 not in response.text
+
+
+@pytest.mark.usefixtures("llm")
+async def test_메시지가_500자면_평소처럼_답한다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+):
+    chat_model.append(AIMessage(content="좋아요"))
+
+    assert auth_client.post(_messages_url(thread), json={"content": "가" * 500}).status_code == status.HTTP_200_OK
+    assert len(repository.recent_messages(thread.thread_id, 10)) == 2
+
+
+@pytest.mark.usefixtures("llm")
+async def test_답변이_500자를_넘으면_500자_안_마지막_문장까지만_보내고_저장한다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+):
+    long_answer = "스쿼트는 하체 운동의 기본이에요. " * 40
+    chat_model.append(AIMessage(content=long_answer))
+
+    response = auth_client.post(_messages_url(thread), json={"content": "스쿼트 알려줘"})
+
+    events = _events(response.text)
+    streamed = "".join(data["text"] for kind, data in events if kind == "delta")
+    kind, done = events[-1]
+    assert len(streamed) <= 500 and streamed.endswith(".")
+    assert done["message"]["content"] == streamed
+    assert repository.recent_messages(thread.thread_id, 10)[-1].content == streamed
+
+
+@pytest.mark.usefixtures("llm", "now")
+async def test_저장한_메시지는_대화방과_같이_14일_뒤_만료_시각을_갖는다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+    settings: Settings,
+):
+    from app.chat.models import ThreadRecord as Thread
+    from app.chat.utils import ttl_epoch
+    from tests.conftest import NOW
+
+    chat_model.append(AIMessage(content="좋아요"))
+    auth_client.post(_messages_url(thread), json={"content": "안녕"})
+
+    expected = ttl_epoch(NOW, settings.thread_ttl_days)
+    saved = list(MessageRecord.query(thread.thread_id))
+    assert [message.deleted_at for message in saved] == [expected, expected]
+    assert Thread.get(thread.user_id, thread.thread_id).expires_at == expected

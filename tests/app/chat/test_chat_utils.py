@@ -98,3 +98,22 @@ def test_메시지_응답은_비어_있는_본문과_시각을_빈_문자열로_
     view = utils.to_message_view(message)
 
     assert (view["content"], view["created_at"]) == ("", "")
+
+
+def test_답변이_상한_안이면_그대로_둔다():
+    assert utils.clip_answer("짧은 답이에요.", 500) == "짧은 답이에요."
+
+
+def test_답변이_상한을_넘으면_상한_안_마지막_문장까지만_남긴다():
+    text = "첫 문장이에요. 둘째 문장이에요! 셋째 문장은 길게 이어져요"
+
+    assert utils.clip_answer(text, 25) == "첫 문장이에요. 둘째 문장이에요!"
+
+
+def test_상한_안에_문장_끝이_없으면_상한에서_자른다():
+    assert utils.clip_answer("가" * 30, 10) == "가" * 10
+
+
+def test_스트림_조각은_상한을_넘는_순간_문장_끝까지만_보내고_닫는다():
+    assert utils.clip_delta("", "안녕하세요.", 20) == ("안녕하세요.", False)
+    assert utils.clip_delta("안녕하세요.", " 운동해요. 오늘은 하체", 13) == (" 운동해요.", True)
