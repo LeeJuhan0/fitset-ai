@@ -1,3 +1,5 @@
+from app.memory.schemas import UserPreferences
+from app.memory.utils import render_preferences
 from app.routines.enums import Goal, Level, MuscleGroup
 
 MUSCLES = frozenset(MuscleGroup)
@@ -165,3 +167,23 @@ def warmup_weight(slug: str, weight: float | None, equipment: list[str]) -> floa
     if halved is None:
         return None
     return max(halved, min_weight(slug, equipment))
+
+
+def excluded_exercises(preferences: UserPreferences | None) -> tuple[str, ...]:
+    """운동 편향의 기피 거절 종목명"""
+    if preferences is None:
+        return ()
+    items = [*preferences.avoided_exercises, *preferences.rejected_exercises]
+    return tuple(dict.fromkeys(item.name for item in items))
+
+
+def preference_context(context: str | None, preferences: UserPreferences | None) -> str | None:
+    """요청 문맥 뒤에 운동 편향 문장 덧붙임"""
+    rendered = render_preferences(preferences) if preferences is not None else None
+    parts = [part for part in (context, rendered) if part]
+    return "\n".join(parts) or None
+
+
+def prefers_home(preferences: UserPreferences | None) -> bool:
+    """운동 편향상 집에서 운동하는지 여부"""
+    return preferences is not None and preferences.environment.place == "home"

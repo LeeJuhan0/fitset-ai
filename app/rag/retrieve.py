@@ -23,6 +23,7 @@ class SearchFilters:
     minutes: int
     tolerance: float
     home_only: bool
+    excluded_exercises: tuple[str, ...] = ()
 
     def minute_window(self) -> tuple[int, int]:
         """요청 시간 허용 오차 적용 정수 분 범위 계산"""
@@ -64,7 +65,23 @@ async def top_candidates(filters: SearchFilters, parsed_avoided: set[str], query
     limit = get_settings().cosine_top_k
     strict = replace(filters, avoided=filters.avoided | parsed_avoided)
     top = await asyncio.to_thread(fetch, strict, query_vector, limit)
-    if top or not parsed_avoided:
-        return top
-    logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed_avoided))
-    return await asyncio.to_thread(fetch, filters, query_vector, limit)
+    if not top and parsed_avoided:
+        logger.info("parsed avoid %s emptied candidates, retrying without it", sorted(parsed_avoided))
+        top = await asyncio.to_thread(fetch, filters, query_vector, limit)
+    return without_excluded(top, filters.excluded_exercises)
+
+
+def without_excluded(rows: list[dict], excluded: tuple[str, ...]) -> list[dict]:
+    """기피 거절 종목 든 루틴 제외, 다 빠지면 원본 유지"""
+    if not excluded:
+        return rows
+    kept = [row for row in rows if not _has_excluded(row.get("exercise_names") or [], excluded)]
+    if kept:
+        return kept
+    logger.info("excluded exercises %s emptied candidates, keeping all", list(excluded))
+    return rows
+
+
+def _has_excluded(names: list[str], excluded: tuple[str, ...]) -> bool:
+    """종목명 부분 일치로 제외 대상 포함 여부"""
+    return any(word in name or name in word for name in names for word in excluded)

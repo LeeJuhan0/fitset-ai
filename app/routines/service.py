@@ -7,6 +7,7 @@ from app.core.ratelimit import RateLimiter
 from app.core.config import get_settings
 from app.core.exceptions import AiUnavailableError, RateLimitedError
 from app.exercises import repository as exercise_catalog
+from app.memory import service as memory_service
 from app.rag import pipeline, query
 from app.rag.retrieve import SearchFilters
 from app.routines import utils
@@ -37,11 +38,15 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     if not postgres.is_configured():
         raise AiUnavailableError("루틴 검색 저장소가 설정되지 않았습니다.")
 
-    profile = await asyncio.to_thread(users_repository.get_profile, user_id)
+    profile, preferences = await asyncio.gather(
+        asyncio.to_thread(users_repository.get_profile, user_id),
+        memory_service.latest_preferences(user_id),
+    )
     goal = profile.get("goal") or utils.DEFAULT_GOAL
+    context = utils.preference_context(request.context, preferences)
     workouts, analysis = await asyncio.gather(
         asyncio.to_thread(workouts_repository.get_recent_workouts, user_id, settings.workout_days),
-        query.analyze(goal, request.level, request.muscle_groups, request.minutes, request.context),
+        query.analyze(goal, request.level, request.muscle_groups, request.minutes, context),
     )
     query_description, parsed_avoided, unsafe_constraints = analysis
 
@@ -52,7 +57,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     meta = exercise_catalog.get_exercise_catalog()
     stats = utils.build_e1rm_stats(workouts)
     ratio = utils.bodyweight_ratio(workouts, meta)
-    home_only = ratio is not None and ratio >= settings.bodyweight_home_ratio
+    home_only = (ratio is not None and ratio >= settings.bodyweight_home_ratio) or utils.prefers_home(preferences)
 
     avoided = utils.effective_avoided(profile.get("avoidBodyParts"), request.muscle_groups)
     parsed = utils.effective_avoided(sorted(parsed_avoided), request.muscle_groups)
@@ -62,6 +67,7 @@ async def generate_routine(user_id: str, request: RoutineGenerateRequest) -> Rou
     filters = SearchFilters(
         muscle_groups=request.muscle_groups, avoided=avoided, level=request.level,
         minutes=request.minutes, tolerance=settings.minutes_tolerance, home_only=home_only,
+        excluded_exercises=utils.excluded_exercises(preferences),
     )
     chosen = await pipeline.find_routine(query_description, filters, parsed)
     if chosen is None:
