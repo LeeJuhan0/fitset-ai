@@ -135,16 +135,11 @@ def classify(model_id: str, system: str, text: str) -> str:
 
 
 def embed_query(text: str) -> list[float]:
-    """검색 쿼리 1건 Cohere 임베딩 벡터 생성"""
+    """검색 쿼리 1건 Titan 임베딩 벡터 생성"""
     settings = get_settings()
-    body = {
-        "texts": [text],
-        "input_type": "search_query",
-        "embedding_types": ["float"],
-        "output_dimension": settings.embed_dimension,
-    }
+    body = {"inputText": text, "dimensions": settings.embed_dimension, "normalize": True}
     response = _runtime().invoke_model(modelId=settings.embed_model_id, body=json.dumps(body))
-    return json.loads(response["body"].read())["embeddings"]["float"][0]
+    return json.loads(response["body"].read())["embedding"]
 
 
 def try_embed_query(text: str) -> list[float] | None:

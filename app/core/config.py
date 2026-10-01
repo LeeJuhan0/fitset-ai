@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     jwt_public_key_param: str = "/fitset/dev/jwt/public-key"
     jwt_public_key_pem: str | None = None
 
-    embed_model_id: str = "global.cohere.embed-v4:0"
+    embed_model_id: str = "amazon.titan-embed-text-v2:0"
     embed_dimension: int = 1024
-    llm_model_id: str = "global.amazon.nova-2-lite-v1:0"
+    llm_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
     llm_max_tokens: int = 1024
     chat_max_tokens: int = 450
     chat_answer_max_chars: int = 500

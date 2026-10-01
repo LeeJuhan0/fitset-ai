@@ -34,4 +34,4 @@ spec:
               value: "3"
             # 운동, 식단, 건강 밖의 질문을 막는 범위 판정 모델, 가드레일과 동시에 돈다
             - name: SCOPE_MODEL_ID
-              value: global.amazon.nova-2-lite-v1:0
+              value: anthropic.claude-3-haiku-20240307-v1:0
