@@ -18,12 +18,12 @@ def _analyze():
 
 async def test_요청_분석은_LLM_묘사문과_허용_기피_부위_안전_제약을_준다(llm: SimpleNamespace):
     llm.structured[QueryAnalysis] = QueryAnalysis(
-        description=" 스쿼트 위주 하체 루틴 ", avoid_muscles=["햄스트링", "무릎"], unsafe_constraints=["점프 금지", " "],
+        description=" 스쿼트 위주 하체 루틴 ", avoid_muscles=["햄스트링", "무릎"], unsafe_constraints=["햄스트링 통증", "가동 범위 제한", " "],
     )
 
     result = await _analyze()
 
-    assert result == ("스쿼트 위주 하체 루틴", {"hamstrings"}, ["점프 금지"])
+    assert result == ("스쿼트 위주 하체 루틴", {"hamstrings"}, ["햄스트링 통증"])
 
 
 async def test_요청_분석은_LLM이_실패하면_템플릿_묘사문으로_강등한다(llm: SimpleNamespace):
@@ -100,3 +100,15 @@ async def test_최종_선택은_설정한_후보_수만큼만_LLM에_보인다(
     chosen = await rerank.choose(candidates, "하체 루틴")
 
     assert chosen["slug"] == "leg-best"
+
+
+def test_안전_제약은_문맥에_없는_단어면_버린다():
+    unsafe = ["무릎 수슬 직후", "가동 범위 제한"]
+    assert query.grounded_unsafe(unsafe, "어제 무릎 수슬했어요") == ["무릎 수슬 직후"]
+    assert query.grounded_unsafe(unsafe, None) == []
+
+
+def test_요청_외_부위_과반을_기피하면_몰아넣기로_본다():
+    others = query.MUSCLES - {"chest"}
+    assert query.dumped_avoid(set(others), ["chest"])
+    assert not query.dumped_avoid({"quadriceps", "hamstrings"}, ["chest"])
