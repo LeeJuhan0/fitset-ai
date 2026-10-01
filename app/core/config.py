@@ -56,6 +56,10 @@ class Settings(BaseSettings):
 
     executor_max_workers: int = 24
 
+    sentry_dsn: str | None = None
+    sentry_environment: str = "dev"
+    sentry_sample_rate: float = 0.1
+
     bedrock_connect_timeout: float = 2.0
     bedrock_read_timeout: float = 8.0
     bedrock_max_attempts: int = 1

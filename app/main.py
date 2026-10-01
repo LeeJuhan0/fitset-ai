@@ -7,6 +7,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from app.chat import router as chat_router
 from app.core import dynamo
@@ -19,6 +22,37 @@ from app.clients import postgres
 
 configure_logging()
 logger = logging.getLogger("fitset")
+
+FAILED_STATUS_CODES = {403, *range(500, 599)}
+CAPTURED_METHODS = ("GET", "POST", "DELETE", "PUT", "PATCH")
+
+
+def init_sentry() -> None:
+    """DSN 있을 때만 Sentry 에러 트레이스 수집"""
+    settings = get_settings()
+    if not settings.sentry_dsn:
+        return
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.sentry_environment,
+        traces_sample_rate=settings.sentry_sample_rate,
+        profiles_sample_rate=settings.sentry_sample_rate,
+        integrations=[
+            StarletteIntegration(
+                transaction_style="endpoint",
+                failed_request_status_codes=FAILED_STATUS_CODES,
+                http_methods_to_capture=CAPTURED_METHODS,
+            ),
+            FastApiIntegration(
+                transaction_style="endpoint",
+                failed_request_status_codes=FAILED_STATUS_CODES,
+                http_methods_to_capture=CAPTURED_METHODS,
+            ),
+        ],
+    )
+
+
+init_sentry()
 
 
 @asynccontextmanager

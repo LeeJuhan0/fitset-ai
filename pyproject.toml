@@ -20,6 +20,7 @@ dependencies = [
     "pgvector>=0.3",
     "pynamodb>=6.0",
     "alembic>=1.16",
+    "sentry-sdk[fastapi] (>=2.0)",
 ]
 
 [tool.poetry]
