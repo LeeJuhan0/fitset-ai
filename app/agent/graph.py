@@ -20,7 +20,6 @@ from app.core.config import get_settings
 logger = logging.getLogger("fitset")
 
 AGENT_NODE = "agent"
-CACHE_POINT = {"cachePoint": {"type": "default"}}
 GUARD_NODE = "guard"
 TOOLS_NODE = "tools"
 
@@ -142,8 +141,8 @@ def _text_of(message: AnyMessage) -> str:
 
 
 def _system_message(context: str | None) -> SystemMessage:
-    """고정 프롬프트 뒤 캐시 지점, 그 뒤 유저별 요약"""
-    blocks = [{"type": "text", "text": prompts.CHAT_SYSTEM.strip()}, CACHE_POINT]
+    """고정 프롬프트 뒤 유저별 요약"""
+    blocks = [{"type": "text", "text": prompts.CHAT_SYSTEM.strip()}]
     if context:
         blocks.append({"type": "text", "text": context})
     return SystemMessage(content=blocks)
