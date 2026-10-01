@@ -5,6 +5,11 @@ on:
   push:
     branches: [develop]
   workflow_dispatch:
+    inputs:
+      sync_routines:
+        description: "prod 배포 전에 dev routines 를 prod 로 통째 복사"
+        type: boolean
+        default: false
 
 concurrency:
   group: cd-fitset-ai-server-${{ github.ref_name }}
@@ -85,6 +90,27 @@ jobs:
           sed -i "s/IMAGE_TAG/${{ github.sha }}/g" "$OVERLAY/kustomization.yaml" "$OVERLAY/patch-deployment.yaml"
           kubectl apply -k "$OVERLAY"
 
+      # dev routines 를 prod 로 복사한다. 쿼리 임베딩 모델이 바뀌면 루틴 임베딩도 같이 바뀌어야 하므로 롤아웃 확인보다 먼저 끝낸다.
+      - name: Sync routines from dev
+        id: sync
+        if: github.ref_name == 'main' && inputs.sync_routines
+        run: |
+          JOB=deploy/k8s/overlays/prod/routines-sync-job.yaml
+          sed -i "s/IMAGE_TAG/${{ github.sha }}/g" "$JOB"
+          kubectl -n "$K8S_NAMESPACE" delete job routines-sync --ignore-not-found
+          kubectl -n "$K8S_NAMESPACE" apply -f "$JOB"
+          for i in $(seq 1 60); do
+            STATUS=$(kubectl -n "$K8S_NAMESPACE" get job routines-sync -o jsonpath='{.status.succeeded}/{.status.failed}')
+            case "$STATUS" in
+              1/*) kubectl -n "$K8S_NAMESPACE" logs job/routines-sync; exit 0 ;;
+              */1) break ;;
+            esac
+            sleep 10
+          done
+          kubectl -n "$K8S_NAMESPACE" describe job routines-sync | tail -20 || true
+          kubectl -n "$K8S_NAMESPACE" logs job/routines-sync || true
+          exit 1
+
       - name: Wait for rollout
         id: rollout
         run: |
@@ -126,7 +152,7 @@ jobs:
           BUILT_TS: ${{ steps.timer-build.outputs.built }}
           SERVICE: ai-chat-api (${{ github.ref_name == 'main' && 'prod' || 'dev' }})
           TARGET_URL: https://${{ env.HOST }}/ai/v1
-          FAILED_STEP: ${{ steps.deploy.outcome == 'failure' && 'EKS 배포' || steps.rollout.outcome == 'failure' && '롤아웃(자동 롤백됨)' || steps.exists.outcome == 'failure' && '이미지 확인' || '이미지 빌드·검증' }}
+          FAILED_STEP: ${{ steps.deploy.outcome == 'failure' && 'EKS 배포' || steps.sync.outcome == 'failure' && 'routines 복사' || steps.rollout.outcome == 'failure' && '롤아웃(자동 롤백됨)' || steps.exists.outcome == 'failure' && '이미지 확인' || '이미지 빌드·검증' }}
         run: |
           # 웹훅이 없는 레포에서 배포 자체를 실패로 만들지 않는다.
           if [ -z "$SLACK_WEBHOOK_URL" ]; then

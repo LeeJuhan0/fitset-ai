@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     pg_statement_timeout: float = 5.0
     pg_pool_max: int = 5
 
+    sync_source_pg_host: str | None = None
+    sync_source_pg_password: str = ""
+
     jwt_public_key_param: str = "/fitset/dev/jwt/public-key"
     jwt_public_key_pem: str | None = None
 
@@ -55,6 +58,8 @@ class Settings(BaseSettings):
     routine_generations_per_minute: int = 5
 
     executor_max_workers: int = 24
+
+    slack_error_webhook_url: str | None = None
 
     sentry_dsn: str | None = None
     sentry_environment: str = "dev"

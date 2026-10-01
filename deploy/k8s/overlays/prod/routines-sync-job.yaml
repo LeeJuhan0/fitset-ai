@@ -1,0 +1,39 @@
+# CD 수동 실행에서 sync_routines 를 고를 때만 적용한다. kustomization 에 넣지 않는다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: routines-sync
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 540
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        pool: prod
+      tolerations:
+        - key: workload
+          operator: Equal
+          value: prod
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: routines-sync
+          image: 729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server:IMAGE_TAG
+          command: ["python", "-m", "app.routines.sync"]
+          envFrom:
+            - secretRef:
+                name: fitset-ai-server
+          env:
+            - name: PG_HOST
+              value: fitset-prod-pgvector.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+            - name: SYNC_SOURCE_PG_HOST
+              value: fitset-dev-pgvector.c9uc6woykoqt.ap-northeast-2.rds.amazonaws.com
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
