@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.clients import slack
 from app.core.exceptions import DomainError
 
 logger = logging.getLogger("fitset")
@@ -39,10 +40,12 @@ def _error_response(
 async def _domain_exception_handler(request: Request, exc: DomainError) -> JSONResponse:
     """도메인 예외를 상태 코드별 실패 응답으로 변환"""
     if exc.status_code >= 500:
+        trace_id = getattr(request.state, "trace_id", "-")
         logger.error(
             "domain error %s: %s %s", exc.code, request.method, request.url.path,
-            exc_info=exc, extra={"trace_id": getattr(request.state, "trace_id", "-")},
+            exc_info=exc, extra={"trace_id": trace_id},
         )
+        slack.notify_error(exc.code, request.method, request.url.path, exc, trace_id)
     return _error_response(request, exc.status_code, exc.code, exc.message)
 
 
@@ -77,10 +80,12 @@ async def _validation_exception_handler(
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """미처리 예외 로그 기록 후 500 응답 변환"""
+    trace_id = getattr(request.state, "trace_id", "-")
     logger.exception(
         "unhandled error: %s %s", request.method, request.url.path,
-        exc_info=exc, extra={"trace_id": getattr(request.state, "trace_id", "-")},
+        exc_info=exc, extra={"trace_id": trace_id},
     )
+    slack.notify_error(_FALLBACK_ERROR_CODE, request.method, request.url.path, exc, trace_id)
     return _error_response(
         request, status.HTTP_500_INTERNAL_SERVER_ERROR, _FALLBACK_ERROR_CODE,
         "서버 내부 오류가 발생했습니다.",
