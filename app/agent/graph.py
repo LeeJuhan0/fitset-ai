@@ -32,7 +32,7 @@ class GraphEvent(StrEnum):
 class ChatState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_id: str
-    force_routine: NotRequired[bool]
+    force_tool: NotRequired[str | None]
 
 
 @dataclass(frozen=True)
@@ -63,22 +63,24 @@ def _model() -> Runnable:
 
 
 @lru_cache
-def _routine_model() -> Runnable:
-    """루틴 도구 호출을 강제한 채팅 모델"""
-    return _chat_model().bind_tools(tools.TOOLS, tool_choice=guardrails.ROUTINE_TOOL)
+def _forced_model(tool: str) -> Runnable:
+    """지정 도구 호출을 강제한 채팅 모델"""
+    return _chat_model().bind_tools(tools.TOOLS, tool_choice=tool)
 
 
 async def _agent_node(state: ChatState) -> dict:
     """모델 호출로 답변 또는 툴콜 수신"""
-    model = _routine_model() if state.get("force_routine") else _model()
+    tool = state.get("force_tool")
+    model = _forced_model(tool) if tool else _model()
     response = await model.ainvoke(state["messages"])
-    return {"messages": [response], "force_routine": False}
+    return {"messages": [response], "force_tool": None}
 
 
 def _guard_node(state: ChatState) -> dict:
-    """지어낸 루틴 답변 제거 후 도구 강제"""
-    logger.warning("agent wrote a routine without the tool, retrying with it")
-    return {"messages": [RemoveMessage(id=state["messages"][-1].id)], "force_routine": True}
+    """도구를 건너뛴 답변 제거 후 도구 강제"""
+    tool = guardrails.forced_tool(state["messages"])
+    logger.warning("agent answered without %s, retrying with it", tool)
+    return {"messages": [RemoveMessage(id=state["messages"][-1].id)], "force_tool": tool}
 
 
 def tool_node() -> ToolNode:
@@ -92,9 +94,9 @@ def _tool_turns(messages: list[AnyMessage]) -> int:
 
 
 def _route(state: ChatState) -> str:
-    """툴콜 유무, 왕복 상한, 지어낸 루틴으로 다음 노드 결정"""
+    """툴콜 유무, 왕복 상한, 도구 건너뛴 답변으로 다음 노드 결정"""
     if not getattr(state["messages"][-1], "tool_calls", None):
-        return GUARD_NODE if guardrails.invents_routine(state["messages"]) else END
+        return GUARD_NODE if guardrails.forced_tool(state["messages"]) else END
     if _tool_turns(state["messages"]) > get_settings().agent_max_tool_turns:
         logger.warning("tool turn limit reached, ending turn")
         return END
@@ -204,11 +206,11 @@ async def run_turn(user_id: str, context: str | None, history: list[AnyMessage])
     return _finalize(state)
 
 
-def _judge_held(hold: guardrails.PrescriptionHold, messages: list[AnyMessage]) -> str:
+def _judge_held(hold: guardrails.AnswerHold, messages: list[AnyMessage]) -> str:
     """모델 응답 완료 시 보류분 방출 또는 폐기"""
     if messages[-1].type != "ai":
         return ""
-    if guardrails.invents_routine(messages):
+    if guardrails.forced_tool(messages):
         hold.drop()
         return ""
     return hold.release()
@@ -220,7 +222,7 @@ async def run_turn_stream(user_id: str, context: str | None, history: list[AnyMe
     final_state: dict = {}
     markdown = MarkdownStreamFilter()
     internal = InternalBlockFilter()
-    hold = guardrails.PrescriptionHold()
+    hold = guardrails.AnswerHold()
     async for mode, data in _graph().astream(inputs, stream_mode=["messages", "values"]):
         if mode == "values":
             final_state = data

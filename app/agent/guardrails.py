@@ -22,21 +22,45 @@ BLOCKED_REPLIES = {
 SCOPE_REPLIES = {"OUT": OFF_TOPIC_REPLY, "ABOUT": CAPABILITY_REPLY}
 HARMFUL_REPLY = "그 요청에는 답하지 않을게요. 운동이나 건강 이야기라면 언제든 물어봐 주세요."
 ROUTINE_TOOL = "RecommendRoutine"
+HISTORY_TOOL = "QueryWorkoutHistory"
 PRESCRIPTION = re.compile(r"\d+\s*세트|\d+\s*[-~]\s*\d+\s*회|\d+\s*회\s*반복")
+HISTORY_REFUSAL = re.compile(r"기록.{0,15}(수 없|가 없|이 없)")
+REFUSAL_WINDOW = 100
 DIGIT = re.compile(r"\d")
 
 
-def invents_routine(messages: list[AnyMessage]) -> bool:
-    """도구 없이 세트 횟수를 처방한 답변 판정"""
+def _tool_free_answer(messages: list[AnyMessage]) -> AnyMessage | None:
+    """이번 턴 도구 없이 낸 마지막 답변"""
     last = messages[-1]
     if last.type != "ai" or getattr(last, "tool_calls", None):
-        return False
+        return None
     for message in reversed(messages[:-1]):
         if message.type == "human":
             break
         if message.type == "tool":
-            return False
-    return bool(PRESCRIPTION.search(last.text))
+            return None
+    return last
+
+
+def invents_routine(messages: list[AnyMessage]) -> bool:
+    """도구 없이 세트 횟수를 처방한 답변 판정"""
+    answer = _tool_free_answer(messages)
+    return answer is not None and bool(PRESCRIPTION.search(answer.text))
+
+
+def refuses_history(messages: list[AnyMessage]) -> bool:
+    """도구 없이 기록 조회를 거절한 답변 판정"""
+    answer = _tool_free_answer(messages)
+    return answer is not None and bool(HISTORY_REFUSAL.search(answer.text[:REFUSAL_WINDOW]))
+
+
+def forced_tool(messages: list[AnyMessage]) -> str | None:
+    """도구를 건너뛴 답변이면 강제할 도구 이름"""
+    if invents_routine(messages):
+        return ROUTINE_TOOL
+    if refuses_history(messages):
+        return HISTORY_TOOL
+    return None
 
 
 class PrescriptionHold:
@@ -65,6 +89,56 @@ class PrescriptionHold:
     def drop(self) -> None:
         """지어낸 루틴으로 판정된 보류분 폐기"""
         self._held = ""
+
+
+class RefusalHold:
+    """답변 첫 구간을 거절 판정 전까지 보류"""
+
+    def __init__(self):
+        """보류 버퍼와 통과 여부 초기화"""
+        self._held = ""
+        self._passing = False
+
+    def feed(self, text: str) -> str:
+        """조각 투입, 첫 구간에 거절이 없으면 통과"""
+        if self._passing:
+            return text
+        self._held += text
+        if len(self._held) < REFUSAL_WINDOW or HISTORY_REFUSAL.search(self._held[:REFUSAL_WINDOW]):
+            return ""
+        held, self._held, self._passing = self._held, "", True
+        return held
+
+    def release(self) -> str:
+        """보류분 반환 후 다음 답변용 초기화"""
+        held, self._held, self._passing = self._held, "", False
+        return held
+
+    def drop(self) -> None:
+        """거절로 판정된 보류분 폐기"""
+        self._held, self._passing = "", False
+
+
+class AnswerHold:
+    """거절 보류 뒤 처방 보류를 잇는 스트림 보류"""
+
+    def __init__(self):
+        """두 보류 장치 생성"""
+        self._refusal = RefusalHold()
+        self._prescription = PrescriptionHold()
+
+    def feed(self, text: str) -> str:
+        """조각 투입, 두 보류를 통과한 확정분 반환"""
+        return self._prescription.feed(self._refusal.feed(text))
+
+    def release(self) -> str:
+        """판정 통과한 보류분 전부 반환"""
+        return self._prescription.feed(self._refusal.release()) + self._prescription.release()
+
+    def drop(self) -> None:
+        """도구 강제로 판정된 보류분 폐기"""
+        self._refusal.drop()
+        self._prescription.drop()
 
 
 def enforce_scheme_contract(

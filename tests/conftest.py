@@ -167,7 +167,7 @@ def chat_model(monkeypatch):
     replies = []
     model = GenericFakeChatModel(messages=iter(replies), disable_streaming=True)
     monkeypatch.setattr(graph, "_model", lambda: model)
-    monkeypatch.setattr(graph, "_routine_model", lambda: model)
+    monkeypatch.setattr(graph, "_forced_model", lambda tool: model)
     return replies
 
 @pytest.fixture

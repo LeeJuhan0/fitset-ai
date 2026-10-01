@@ -7,8 +7,11 @@ from app.agent.guardrails import (
     CAPABILITY_REPLY,
     HARMFUL_REPLY,
     OFF_TOPIC_REPLY,
+    REFUSAL_WINDOW,
+    AnswerHold,
     PrescriptionHold,
     enforce_scheme_contract,
+    forced_tool,
     invents_routine,
     scope_label,
     screen,
@@ -180,3 +183,39 @@ def test_보류는_첫_숫자부터_판정까지_잡아_둔다():
     assert hold.feed("다음 3") == "다음 "
     hold.drop()
     assert hold.release() == ""
+
+
+@pytest.mark.parametrize("answer", [
+    "죄송합니다. 사용자님의 운동 기록을 확인할 수 없어 알 수 없습니다.",
+    "죄송합니다. 사용자님의 머신 레그프레스 기록을 확인할 수 없습니다.",
+    "죄송합니다. 유저님의 운동 기록을 확인할 수 있는 도구가 없어서 알 수 없습니다.",
+])
+def test_도구_없이_기록_조회를_거절하면_기록_도구를_강제한다(answer):
+    assert forced_tool([HumanMessage("나 벤치 한적 있어?"), AIMessage(answer)]) == "QueryWorkoutHistory"
+
+
+def test_기록_도구를_거친_뒤_기록이_없다는_답변은_강제하지_않는다():
+    messages = [HumanMessage("레그프레스 기록"), AIMessage("", tool_calls=[{"name": "QueryWorkoutHistory", "args": {}, "id": "c"}]),
+                ToolMessage("조회 결과 없음", tool_call_id="c"), AIMessage("최근 기록이 없어요")]
+
+    assert forced_tool(messages) is None
+
+
+def test_답변_보류는_첫_구간에_거절이_없으면_흘려보낸다():
+    hold = AnswerHold()
+    head = "가" * REFUSAL_WINDOW
+
+    assert hold.feed(head[:50]) == ""
+    assert hold.feed(head[50:] + "나") == head + "나"
+    assert hold.feed("다") == "다"
+
+
+def test_답변_보류는_첫_구간에_거절이_있으면_판정까지_잡아_둔다():
+    hold = AnswerHold()
+    refusal = "죄송합니다. 운동 기록을 확인할 수 없어요." + "가" * REFUSAL_WINDOW
+
+    assert hold.feed(refusal) == ""
+    hold.drop()
+    assert hold.release() == ""
+    assert hold.feed("짧은 답") == ""
+    assert hold.release() == "짧은 답"
