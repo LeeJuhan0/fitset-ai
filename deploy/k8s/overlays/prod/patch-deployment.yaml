@@ -39,3 +39,5 @@ spec:
               value: "3"
             - name: SCOPE_MODEL_ID
               value: anthropic.claude-3-haiku-20240307-v1:0
+            - name: SENTRY_ENVIRONMENT
+              value: prod
