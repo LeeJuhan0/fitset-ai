@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from pynamodb.attributes import MapAttribute, NumberAttribute, UnicodeAttribute
+from pynamodb.attributes import NumberAttribute, UnicodeAttribute
 
 from app.chat.utils import ttl_epoch
 from app.core.clock import iso_utc
+from app.core.crypto import EncryptedJSONAttribute, EncryptedUnicodeAttribute
 from app.core.dynamo import DynamoModel
 from app.core.ulid import new_ulid
 
@@ -14,8 +15,8 @@ class ThreadRecord(DynamoModel):
 
     user_id = UnicodeAttribute(hash_key=True)
     thread_id = UnicodeAttribute(range_key=True)
-    title = UnicodeAttribute(null=True)
-    summary = MapAttribute(null=True)
+    title = EncryptedUnicodeAttribute(null=True)
+    summary = EncryptedJSONAttribute(null=True)
     summary_upto = UnicodeAttribute(null=True)
     last_message_at = UnicodeAttribute(null=True)
     expires_at = NumberAttribute(null=True)
@@ -46,8 +47,8 @@ class MessageRecord(DynamoModel):
     message_id = UnicodeAttribute(range_key=True)
     user_id = UnicodeAttribute(null=True)
     role = UnicodeAttribute()
-    content = UnicodeAttribute(null=True)
+    content = EncryptedUnicodeAttribute(null=True)
     response_scheme = UnicodeAttribute(null=True)
-    payload = MapAttribute(null=True)
+    payload = EncryptedJSONAttribute(null=True)
     created_at = UnicodeAttribute(null=True)
     deleted_at = NumberAttribute(null=True)

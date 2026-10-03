@@ -339,7 +339,7 @@ def _thread_summary(thread: ThreadRecord) -> ThreadSummary | None:
     """저장된 대화방 상태 Map 을 스키마 객체로"""
     if thread.summary is None:
         return None
-    return ThreadSummary(**thread.summary.as_dict())
+    return ThreadSummary(**thread.summary)
 
 
 def _thread_summary_json(thread: ThreadRecord) -> str | None:

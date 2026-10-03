@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from pynamodb.attributes import MapAttribute
-
 from app.chat.enums import MessageRole
 
 SENTENCE_ENDS = (".", "!", "?")
@@ -50,13 +48,6 @@ def needs_summary(count: int, threshold: int) -> bool:
     return count >= threshold
 
 
-def _payload_dict(payload) -> dict | None:
-    """페이로드 맵 속성을 순수 dict 로 변환"""
-    if isinstance(payload, MapAttribute):
-        return payload.as_dict()
-    return payload
-
-
 def to_message_view(message: "MessageRecord") -> dict:
     """저장 메시지를 응답용 dict 로 변환"""
     is_user = message.role == MessageRole.USER
@@ -65,7 +56,7 @@ def to_message_view(message: "MessageRecord") -> dict:
         "role": message.role,
         "content": message.content or "",
         "response_scheme": None if is_user else message.response_scheme,
-        "payload": None if is_user else _payload_dict(message.payload),
+        "payload": None if is_user else message.payload,
         "created_at": message.created_at or "",
     }
 
