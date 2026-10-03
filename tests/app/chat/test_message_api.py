@@ -219,7 +219,7 @@ async def test_대화가_길어지면_대화_요약과_사용자_장기_요약�
     auth_client.post(_messages_url(thread), json=payload)
 
     saved = ThreadRecord.get(USER_ID, thread.thread_id)
-    assert ThreadSummary(**saved.summary.as_dict()) == state
+    assert ThreadSummary(**saved.summary) == state
     assert saved.summary_upto is not None
     assert await memory_service.latest_preferences(USER_ID) == UserPreferences(preferred_exercises=["바벨 스쿼트"])
 

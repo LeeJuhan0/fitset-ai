@@ -1,3 +1,4 @@
+import base64
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from app.auth import repository as auth_repository
 from app.chat import service as chat_service
 from app.chat.models import MessageRecord, ThreadRecord
 from app.clients import bedrock, mysql, postgres
-from app.core import clock, dynamo, ulid
+from app.core import clock, crypto, dynamo, ulid
 from app.core.config import Settings, get_settings
 from app.core.orm import BackendBase
 from app.exercises import models as exercises_models  # noqa: F401
@@ -37,6 +38,7 @@ NOW = datetime(2026, 9, 25, 3, 0, tzinfo=timezone.utc)
 USER_ID = "11111111-1111-1111-1111-111111111111"
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 PG_TEST_DSN = os.environ.get("PG_TEST_DSN")
+TEST_ENCRYPTION_KEY = base64.b64encode(bytes(32)).decode()
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +48,7 @@ def settings(monkeypatch):
     defaults = Settings.model_construct()
     for name in Settings.model_fields:
         monkeypatch.setattr(current, name, getattr(defaults, name))
+    monkeypatch.setattr(current, "chat_encryption_keys", {"v1": TEST_ENCRYPTION_KEY})
     return current
 
 
@@ -59,6 +62,7 @@ def caches():
         bedrock._runtime,
         bedrock.chat_runtime,
         bedrock._structured_model,
+        crypto._aead,
         graph._model,
         postgres._engine,
     ):

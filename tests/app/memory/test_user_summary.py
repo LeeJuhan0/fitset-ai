@@ -15,7 +15,7 @@ from tests.conftest import NOW, USER_ID
 def test_장기_요약은_해당_사용자의_가장_최근_이력을_준다():
     record = repository.latest_user_summary(USER_ID)
 
-    assert record.preferences.as_dict()["training_style"] == "고중량 저반복"
+    assert record.preferences["training_style"] == "고중량 저반복"
 
 
 @pytest.mark.usefixtures("other_user_summary")
@@ -29,7 +29,7 @@ def test_장기_요약_저장은_이전_이력을_남기고_새_이력을_최신
 
     repository.put_user_summary(record)
 
-    assert repository.latest_user_summary(USER_ID).preferences.as_dict()["training_style"] == "펌핑 위주"
+    assert repository.latest_user_summary(USER_ID).preferences["training_style"] == "펌핑 위주"
     assert UserSummaryRecord.count(USER_ID) == 3
 
 
@@ -67,7 +67,7 @@ async def test_대화_요약_병합은_이전_편향과_합친_새_이력을_저
     assert UserPreferences(training_style="고중량 저반복").model_dump_json() in summary_prompts[0]
     assert f"<new_messages>{TRANSCRIPT}</new_messages>" in summary_prompts[0]
     latest = repository.latest_user_summary(USER_ID)
-    assert UserPreferences(**latest.preferences.as_dict()) == _preferences()
+    assert UserPreferences(**latest.preferences) == _preferences()
     assert "summary_text" not in latest.attribute_values
     assert await service.latest_preferences(USER_ID) == _preferences()
     assert (latest.source_thread_id, latest.source_upto, latest.created_at) == ("thread-1", "message-9", iso_utc(NOW))
