@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from pynamodb.attributes import MapAttribute, UnicodeAttribute
+from pynamodb.attributes import UnicodeAttribute
 
 from app.core.clock import iso_utc
+from app.core.crypto import EncryptedJSONAttribute
 from app.core.dynamo import DynamoModel
 from app.core.ulid import new_ulid
 
@@ -13,7 +14,7 @@ class UserSummaryRecord(DynamoModel):
 
     user_id = UnicodeAttribute(hash_key=True)
     summary_id = UnicodeAttribute(range_key=True)
-    preferences = MapAttribute(null=True)
+    preferences = EncryptedJSONAttribute(null=True)
     created_at = UnicodeAttribute()
     source_thread_id = UnicodeAttribute(null=True)
     source_upto = UnicodeAttribute(null=True)

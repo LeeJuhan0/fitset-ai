@@ -32,7 +32,7 @@ async def merge_preferences(user_id: str, thread_id: str, transcript: str, sourc
 
 def _preferences(record: UserSummaryRecord) -> UserPreferences:
     """저장된 운동 편향 Map 을 스키마 객체로"""
-    return UserPreferences(**record.preferences.as_dict())
+    return UserPreferences(**record.preferences)
 
 
 def _previous_preferences(record: UserSummaryRecord | None) -> UserPreferences | None:
