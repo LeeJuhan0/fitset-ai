@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     chat_threads_table: str = "chat_threads"
     chat_messages_table: str = "chat_messages"
     user_summaries_table: str = "user_summaries"
+    chat_encryption_keys: dict[str, str] = {}
+    chat_encryption_key_version: str = "v1"
     max_threads_per_user: int = 10
     thread_ttl_days: int = 14
     chat_context_turns: int = 6
