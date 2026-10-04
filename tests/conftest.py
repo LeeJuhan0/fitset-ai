@@ -111,7 +111,7 @@ def pg_schema():
         pytest.skip("PG_TEST_DSN 미설정")
     engine = create_engine(PG_TEST_DSN)
     with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS routines, alembic_version"))
+        conn.execute(text("DROP TABLE IF EXISTS evidence_situations, evidence_chunks, routines, alembic_version"))
     config = Config(ALEMBIC_INI)
     config.set_main_option("sqlalchemy.url", PG_TEST_DSN)
     command.upgrade(config, "head")
