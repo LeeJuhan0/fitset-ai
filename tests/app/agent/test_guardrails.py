@@ -194,6 +194,27 @@ def test_도구_없이_기록_조회를_거절하면_기록_도구를_강제한�
     assert forced_tool([HumanMessage("나 벤치 한적 있어?"), AIMessage(answer)]) == "QueryWorkoutHistory"
 
 
+@pytest.mark.parametrize("question, answer", [
+    ("세트 사이에 몇 분 쉬어야 돼요?", "근비대면 1~2분 쉬는 게 일반적이에요"),
+    ("같은 부위를 일주일에 몇 번 하는 게 좋아요?", "주당 12~20세트를 나눠서 해요"),
+    ("크레아틴 하루에 얼마나 먹나요", "하루 5g이면 충분해요"),
+])
+def test_방법_질문에_도구_없이_수치를_단정하면_근거_도구를_강제한다(question, answer):
+    assert forced_tool([HumanMessage(question), AIMessage(answer)]) == "FindEvidence"
+
+
+@pytest.mark.parametrize("question", ["중급자 50분 하체", "가슴 루틴 짜줘", "오늘 하체 뭐 할까?"])
+def test_루틴_요청에_세트를_처방하면_루틴_도구를_강제한다(question):
+    assert forced_tool([HumanMessage(question), AIMessage("스쿼트 4세트 8-12회 반복하세요")]) == "RecommendRoutine"
+
+
+def test_근거_도구를_거친_답변의_수치는_강제하지_않는다():
+    messages = [HumanMessage("휴식 몇 분 해요?"), AIMessage("", tool_calls=[{"name": "FindEvidence", "args": {}, "id": "c"}]),
+                ToolMessage("근거", tool_call_id="c"), AIMessage("2분 이상 쉬면 좋아요")]
+
+    assert forced_tool(messages) is None
+
+
 def test_기록_도구를_거친_뒤_기록이_없다는_답변은_강제하지_않는다():
     messages = [HumanMessage("레그프레스 기록"), AIMessage("", tool_calls=[{"name": "QueryWorkoutHistory", "args": {}, "id": "c"}]),
                 ToolMessage("조회 결과 없음", tool_call_id="c"), AIMessage("최근 기록이 없어요")]

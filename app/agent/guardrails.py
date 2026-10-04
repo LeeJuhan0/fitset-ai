@@ -22,8 +22,12 @@ BLOCKED_REPLIES = {
 SCOPE_REPLIES = {"OUT": OFF_TOPIC_REPLY, "ABOUT": CAPABILITY_REPLY}
 HARMFUL_REPLY = "그 요청에는 답하지 않을게요. 운동이나 건강 이야기라면 언제든 물어봐 주세요."
 ROUTINE_TOOL = "RecommendRoutine"
+EVIDENCE_TOOL = "FindEvidence"
 HISTORY_TOOL = "QueryWorkoutHistory"
 PRESCRIPTION = re.compile(r"\d+\s*세트|\d+\s*[-~]\s*\d+\s*회|\d+\s*회\s*반복")
+ADVICE = re.compile(r"\d+\s*(?:분|초|g|mg|kg|%)")
+QUESTION = re.compile(r"\?|[나까]요|는지|될까|되나")
+ROUTINE_REQUEST = re.compile(r"루틴|프로그램|짜\s*[줘주]|뭐\s*할까|추천")
 HISTORY_REFUSAL = re.compile(r"기록.{0,15}(수 없|가 없|이 없)")
 REFUSAL_WINDOW = 100
 DIGIT = re.compile(r"\d")
@@ -54,8 +58,26 @@ def refuses_history(messages: list[AnyMessage]) -> bool:
     return answer is not None and bool(HISTORY_REFUSAL.search(answer.text[:REFUSAL_WINDOW]))
 
 
+def _asks_method(messages: list[AnyMessage]) -> bool:
+    """이번 턴 유저 메시지가 루틴 요청이 아닌 방법 질문인지"""
+    for message in reversed(messages):
+        if message.type == "human":
+            return bool(QUESTION.search(message.text)) and not ROUTINE_REQUEST.search(message.text)
+    return False
+
+
+def skips_evidence(messages: list[AnyMessage]) -> bool:
+    """방법 질문에 도구 없이 수치를 단정한 답변 판정"""
+    answer = _tool_free_answer(messages)
+    if answer is None or not _asks_method(messages):
+        return False
+    return bool(PRESCRIPTION.search(answer.text) or ADVICE.search(answer.text))
+
+
 def forced_tool(messages: list[AnyMessage]) -> str | None:
     """도구를 건너뛴 답변이면 강제할 도구 이름"""
+    if skips_evidence(messages):
+        return EVIDENCE_TOOL
     if invents_routine(messages):
         return ROUTINE_TOOL
     if refuses_history(messages):
