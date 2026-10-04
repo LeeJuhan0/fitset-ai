@@ -27,3 +27,6 @@ demo-web/
 
 # 에이전트 지침 (로컬 전용)
 CLAUDE.md
+
+# 근거 청크 데이터 (로컬 전용)
+scripts/evidence/data/
