@@ -145,7 +145,9 @@ async def send_message_stream(user_id: str, thread_id: str, content: str):
         turn.cancel_title()
         yield StreamKind.ERROR, AiUnavailableError()
         return
-    result = replace(result, content=utils.clip_answer(result.content, limit))
+    if result.footer:
+        yield StreamKind.DELTA, result.footer
+    result = replace(result, content=utils.clip_answer(result.content, limit) + result.footer)
 
     try:
         data = await _persist_answer(user_id, thread_id, result, turn)

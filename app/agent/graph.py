@@ -14,6 +14,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from app.agent import guardrails, prompts, tools
+from app.agent.tools import evidence
 from app.agent.markdown import InternalBlockFilter, MarkdownStreamFilter, strip_internal_blocks, strip_markdown
 from app.clients import bedrock
 from app.core.config import get_settings
@@ -42,6 +43,7 @@ class AgentResult:
     content: str
     response_scheme: str
     payload: dict | None
+    footer: str = ""
 
 
 @lru_cache
@@ -211,11 +213,21 @@ def _log_usage(state: dict) -> None:
 
 
 def _last_artifact(messages: list[AnyMessage]) -> dict:
-    """마지막 툴 메시지 아티팩트, 없으면 빈 dict"""
+    """마지막 화면 아티팩트, 근거 인용은 제외하고 없으면 빈 dict"""
     for message in reversed(messages):
-        if isinstance(message, ToolMessage) and message.artifact:
+        if isinstance(message, ToolMessage) and message.artifact and "response_scheme" in message.artifact:
             return message.artifact
     return {}
+
+
+def _citations(messages: list[AnyMessage]) -> list[dict]:
+    """이번 턴 근거 툴 인용 목록, 같은 논문 중복 제거"""
+    seen: dict[str, dict] = {}
+    for message in messages:
+        if isinstance(message, ToolMessage) and message.artifact and "citations" in message.artifact:
+            for item in message.artifact["citations"]:
+                seen.setdefault(item["doi_url"], item)
+    return list(seen.values())[:evidence.TOP_K]
 
 
 def _finalize(state: dict) -> AgentResult:
@@ -234,7 +246,7 @@ def _finalize(state: dict) -> AgentResult:
     if not content:
         logger.warning("agent produced no text, using fallback")
         content = "요청을 처리했어요. 결과를 확인해보세요."
-    return AgentResult(content, scheme, payload)
+    return AgentResult(content, scheme, payload, evidence.footer(_citations(state.get("messages", []))))
 
 
 async def run_turn(user_id: str, context: str | None, history: list[AnyMessage]) -> AgentResult:

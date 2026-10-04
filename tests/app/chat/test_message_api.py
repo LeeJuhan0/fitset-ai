@@ -6,6 +6,7 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+from app.agent.tools import evidence
 from app.chat import repository
 from app.chat.models import MessageRecord, ThreadRecord
 from app.core.config import Settings
@@ -295,6 +296,35 @@ async def test_답변이_500자를_넘으면_500자_안_마지막_문장까지�
     streamed = "".join(data["text"] for kind, data in events if kind == "delta")
     kind, done = events[-1]
     assert len(streamed) <= 500 and streamed.endswith(".")
+    assert done["message"]["content"] == streamed
+    assert repository.recent_messages(thread.thread_id, 10)[-1].content == streamed
+
+
+@pytest.mark.usefixtures("llm")
+async def test_논문_근거로_답하면_상한_안_답변_뒤에_참고_논문_목록을_붙여_보내고_저장한다(
+    auth_client: TestClient,
+    thread: ThreadRecord,
+    chat_model: list,
+    monkeypatch,
+):
+    citation = {"title": "크레아틴 로딩 필요성", "author_year": "Helms 2014", "doi_url": "https://doi.org/10.1186/1550-2783-11-20"}
+
+    async def fake_run(situation):
+        return "논문 근거", {"citations": [citation]}
+
+    monkeypatch.setattr(evidence, "run", fake_run)
+    chat_model.append(AIMessage(content="", tool_calls=[
+        {"name": "FindEvidence", "args": {"situation": "크레아틴 로딩이 필요한지 궁금한 사람"}, "id": "e1", "type": "tool_call"},
+    ]))
+    chat_model.append(AIMessage(content="로딩은 필수가 아니에요. " * 60))
+
+    response = auth_client.post(_messages_url(thread), json={"content": "크레아틴 로딩 꼭 해야 해요?"})
+
+    events = _events(response.text)
+    streamed = "".join(data["text"] for kind, data in events if kind == "delta")
+    footer = "\n\n참고 논문\n1. 크레아틴 로딩 필요성 (Helms 2014) https://doi.org/10.1186/1550-2783-11-20"
+    kind, done = events[-1]
+    assert streamed.endswith(footer) and len(streamed) - len(footer) <= 500
     assert done["message"]["content"] == streamed
     assert repository.recent_messages(thread.thread_id, 10)[-1].content == streamed
 
