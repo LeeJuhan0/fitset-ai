@@ -4,14 +4,16 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from app.clients import postgres
-from app.routines.models import Routine
+from app.core.orm import SearchBase
+from app.evidence import models as evidence_models  # noqa: F401
+from app.routines import models as routines_models  # noqa: F401
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = Routine.metadata
+target_metadata = SearchBase.metadata
 
 
 def _url():
