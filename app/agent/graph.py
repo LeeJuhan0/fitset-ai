@@ -2,11 +2,12 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated, NotRequired, TypedDict
+from typing import Annotated, Callable, NotRequired, TypedDict
 
+from botocore.exceptions import BotoCoreError, ClientError
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, AnyMessage, RemoveMessage, SystemMessage, ToolMessage
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
@@ -44,12 +45,12 @@ class AgentResult:
 
 
 @lru_cache
-def _chat_model() -> ChatBedrockConverse:
-    """Bedrock 채팅 모델 전역 싱글턴"""
+def _chat_model(model_id: str) -> ChatBedrockConverse:
+    """모델 아이디별 Bedrock 채팅 모델 싱글턴"""
     settings = get_settings()
     return ChatBedrockConverse(
-        model=settings.chat_model_id,
-        provider=bedrock.model_provider(settings.chat_model_id),
+        model=model_id,
+        provider=bedrock.model_provider(model_id),
         region_name=settings.aws_region,
         client=bedrock.chat_runtime(),
         max_tokens=settings.chat_max_tokens,
@@ -57,16 +58,38 @@ def _chat_model() -> ChatBedrockConverse:
     )
 
 
+def _without_cache_points(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """캐시 미지원 폴백용 시스템 메시지 캐시 지점 제거"""
+    return [
+        message.model_copy(update={"content": [block for block in message.content if block != CACHE_POINT]})
+        if isinstance(message, SystemMessage) and isinstance(message.content, list)
+        else message
+        for message in messages
+    ]
+
+
+def _with_fallbacks(bind: Callable[[ChatBedrockConverse], Runnable]) -> Runnable:
+    """주 모델 호출 실패 시 폴백 모델 순서대로 재시도"""
+    settings = get_settings()
+    fallbacks = [
+        RunnableLambda(_without_cache_points) | bind(_chat_model(model_id))
+        for model_id in settings.chat_fallback_model_ids
+    ]
+    return bind(_chat_model(settings.chat_model_id)).with_fallbacks(
+        fallbacks, exceptions_to_handle=(BotoCoreError, ClientError)
+    )
+
+
 @lru_cache
 def _model() -> Runnable:
-    """툴 바인딩된 채팅 모델 전역 싱글턴"""
-    return _chat_model().bind_tools(tools.TOOLS)
+    """툴 바인딩된 채팅 모델과 폴백 전역 싱글턴"""
+    return _with_fallbacks(lambda model: model.bind_tools(tools.TOOLS))
 
 
 @lru_cache
 def _forced_model(tool: str) -> Runnable:
-    """지정 도구 호출을 강제한 채팅 모델"""
-    return _chat_model().bind_tools(tools.TOOLS, tool_choice=tool)
+    """지정 도구 호출을 강제한 채팅 모델과 폴백"""
+    return _with_fallbacks(lambda model: model.bind_tools(tools.TOOLS, tool_choice=tool))
 
 
 async def _agent_node(state: ChatState) -> dict:

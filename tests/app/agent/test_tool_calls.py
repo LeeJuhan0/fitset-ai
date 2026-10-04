@@ -28,3 +28,13 @@ def test_툴콜이_하나면_그대로_둔다():
     response = AIMessage(content="", tool_calls=[_call("a")])
 
     assert graph._first_tool_call_only(response) is response
+
+
+def test_폴백_모델에는_시스템_메시지_캐시_지점을_뺀다():
+    messages = [graph._system_message("유저 요약"), AIMessage(content="안녕")]
+
+    stripped = graph._without_cache_points(messages)
+
+    assert graph.CACHE_POINT in messages[0].content
+    assert graph.CACHE_POINT not in stripped[0].content
+    assert stripped[1] is messages[1]
