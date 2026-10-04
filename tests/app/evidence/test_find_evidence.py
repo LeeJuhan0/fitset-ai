@@ -55,8 +55,8 @@ async def test_1위와_가까운_청크만_거리순으로_근거와_참고_논�
     assert "제목 3" not in content
     assert evidence.footer(artifact["citations"]) == (
         "\n\n참고 논문\n"
-        "1. 제목 0 (Jager 2017) https://doi.org/0\n"
-        "2. 제목 1 (Schoenfeld 2013) https://doi.org/1"
+        "1. 제목 0 (Jager 2017)\n대상: 대상\n방법: 방법\n효과: 효과\nhttps://doi.org/0\n"
+        "2. 제목 1 (Schoenfeld 2013)\n대상: 대상\n방법: 방법\n효과: 효과\nhttps://doi.org/1"
     )
 
 

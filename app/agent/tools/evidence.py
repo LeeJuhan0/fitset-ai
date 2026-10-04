@@ -46,9 +46,9 @@ def _format(rows: list[dict]) -> str:
         for index, row in enumerate(rows, start=1)
     ]
     return (
-        "논문 근거다. 이 내용만 근거로 결론과 핵심 근거를 해요체 두 문장으로만 답한다. "
+        "논문 근거다. 이 내용만 근거로 결론과 핵심 근거를 반드시 해요체(~해요, ~예요) 두 문장으로만 답한다. 반말을 쓰지 않는다. "
         "근거에 없는 수치를 만들지 않고, 연구 대상이 유저와 다르면 그 한계를 짧게 덧붙인다. "
-        "논문 이름, 저자, 링크는 쓰지 않는다. 앱이 답변 아래에 참고 논문 목록을 붙인다.\n\n" + "\n\n".join(blocks)
+        "논문 이름, 저자, 링크와 근거별 대상, 방법, 효과는 쓰지 않는다. 앱이 답변 아래에 참고 논문 목록으로 붙인다.\n\n" + "\n\n".join(blocks)
     )
 
 
@@ -57,7 +57,8 @@ def footer(citations: list[dict]) -> str:
     if not citations:
         return ""
     lines = [
-        f"{index}. {item['title']} ({item['author_year']}) {item['doi_url']}"
+        f"{index}. {item['title']} ({item['author_year']})\n"
+        f"대상: {item['population']}\n방법: {item['method']}\n효과: {item['effect']}\n{item['doi_url']}"
         for index, item in enumerate(citations, start=1)
     ]
     return "\n\n참고 논문\n" + "\n".join(lines)
@@ -79,10 +80,13 @@ async def run(situation: str) -> tuple[str, dict | None]:
     rows = [row for row in rows if row["distance"] <= rows[0]["distance"] + RELATIVE_MARGIN] if rows else []
     if not rows:
         return NO_EVIDENCE, None
-    papers: dict[str, dict] = {}
-    for row in rows:
-        papers.setdefault(row["doi_url"], {"title": row["title"], "author_year": _author_year(row["paper"]), "doi_url": row["doi_url"]})
-    citations = list(papers.values())
+    citations = [
+        {
+            "id": row["id"], "title": row["title"], "author_year": _author_year(row["paper"]),
+            "population": row["population"], "method": row["method"], "effect": row["effect"], "doi_url": row["doi_url"],
+        }
+        for row in rows
+    ]
     return _format(rows), {"citations": citations}
 
 

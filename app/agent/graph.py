@@ -221,12 +221,12 @@ def _last_artifact(messages: list[AnyMessage]) -> dict:
 
 
 def _citations(messages: list[AnyMessage]) -> list[dict]:
-    """이번 턴 근거 툴 인용 목록, 같은 논문 중복 제거"""
+    """이번 턴 근거 툴 인용 목록, 같은 청크 중복 제거"""
     seen: dict[str, dict] = {}
     for message in messages:
         if isinstance(message, ToolMessage) and message.artifact and "citations" in message.artifact:
             for item in message.artifact["citations"]:
-                seen.setdefault(item["doi_url"], item)
+                seen.setdefault(item["id"], item)
     return list(seen.values())[:evidence.TOP_K]
 
 

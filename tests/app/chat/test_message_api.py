@@ -307,7 +307,11 @@ async def test_논문_근거로_답하면_상한_안_답변_뒤에_참고_논문
     chat_model: list,
     monkeypatch,
 ):
-    citation = {"title": "크레아틴 로딩 필요성", "author_year": "Helms 2014", "doi_url": "https://doi.org/10.1186/1550-2783-11-20"}
+    citation = {
+        "id": "helms2014-08", "title": "크레아틴 로딩 필요성", "author_year": "Helms 2014",
+        "population": "크레아틴을 처음 먹는 운동인", "method": "로딩 없이 하루 3g", "effect": "28일이면 비슷하게 포화",
+        "doi_url": "https://doi.org/10.1186/1550-2783-11-20",
+    }
 
     async def fake_run(situation):
         return "논문 근거", {"citations": [citation]}
@@ -322,7 +326,11 @@ async def test_논문_근거로_답하면_상한_안_답변_뒤에_참고_논문
 
     events = _events(response.text)
     streamed = "".join(data["text"] for kind, data in events if kind == "delta")
-    footer = "\n\n참고 논문\n1. 크레아틴 로딩 필요성 (Helms 2014) https://doi.org/10.1186/1550-2783-11-20"
+    footer = (
+        "\n\n참고 논문\n1. 크레아틴 로딩 필요성 (Helms 2014)\n"
+        "대상: 크레아틴을 처음 먹는 운동인\n방법: 로딩 없이 하루 3g\n효과: 28일이면 비슷하게 포화\n"
+        "https://doi.org/10.1186/1550-2783-11-20"
+    )
     kind, done = events[-1]
     assert streamed.endswith(footer) and len(streamed) - len(footer) <= 500
     assert done["message"]["content"] == streamed
