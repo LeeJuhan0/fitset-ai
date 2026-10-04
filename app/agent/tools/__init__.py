@@ -2,7 +2,7 @@ import logging
 
 from langgraph.prebuilt.tool_node import ToolInvocationError
 
-from app.agent.tools import chart, exercise, history, routine
+from app.agent.tools import chart, evidence, exercise, history, routine
 
 logger = logging.getLogger("fitset")
 
@@ -11,6 +11,7 @@ TOOLS = [
     routine.recommend_routine,
     exercise.get_exercise_guide,
     history.query_workout_history,
+    evidence.find_evidence,
 ]
 
 
