@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     embed_model_id: str = "amazon.titan-embed-text-v2:0"
     embed_dimension: int = 1024
     llm_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
+    chat_model_id: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
     llm_max_tokens: int = 1024
     chat_max_tokens: int = 450
     chat_answer_max_chars: int = 500

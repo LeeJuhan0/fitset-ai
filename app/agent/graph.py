@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain_aws import ChatBedrockConverse
-from langchain_core.messages import AnyMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -20,6 +20,7 @@ from app.core.config import get_settings
 logger = logging.getLogger("fitset")
 
 AGENT_NODE = "agent"
+CACHE_POINT = {"cachePoint": {"type": "default"}}
 GUARD_NODE = "guard"
 TOOLS_NODE = "tools"
 
@@ -47,8 +48,8 @@ def _chat_model() -> ChatBedrockConverse:
     """Bedrock 채팅 모델 전역 싱글턴"""
     settings = get_settings()
     return ChatBedrockConverse(
-        model=settings.llm_model_id,
-        provider=bedrock.model_provider(settings.llm_model_id),
+        model=settings.chat_model_id,
+        provider=bedrock.model_provider(settings.chat_model_id),
         region_name=settings.aws_region,
         client=bedrock.chat_runtime(),
         max_tokens=settings.chat_max_tokens,
@@ -72,8 +73,22 @@ async def _agent_node(state: ChatState) -> dict:
     """모델 호출로 답변 또는 툴콜 수신"""
     tool = state.get("force_tool")
     model = _forced_model(tool) if tool else _model()
-    response = await model.ainvoke(state["messages"])
+    response = _first_tool_call_only(await model.ainvoke(state["messages"]))
     return {"messages": [response], "force_tool": None}
+
+
+def _first_tool_call_only(response: AIMessage) -> AIMessage:
+    """병렬 툴콜을 첫 하나로 줄여 화면 결과와 답변 맞춤"""
+    if len(response.tool_calls) <= 1:
+        return response
+    keep = response.tool_calls[0]["id"]
+    content = response.content
+    if isinstance(content, list):
+        content = [
+            block for block in content
+            if not (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") != keep)
+        ]
+    return response.model_copy(update={"content": content, "tool_calls": response.tool_calls[:1]})
 
 
 def _guard_node(state: ChatState) -> dict:
@@ -143,8 +158,8 @@ def _text_of(message: AnyMessage) -> str:
 
 
 def _system_message(context: str | None) -> SystemMessage:
-    """고정 프롬프트 뒤 유저별 요약"""
-    blocks = [{"type": "text", "text": prompts.CHAT_SYSTEM.strip()}]
+    """고정 프롬프트 뒤 캐시 지점, 그 뒤 유저별 요약"""
+    blocks = [{"type": "text", "text": prompts.CHAT_SYSTEM.strip()}, CACHE_POINT]
     if context:
         blocks.append({"type": "text", "text": context})
     return SystemMessage(content=blocks)
