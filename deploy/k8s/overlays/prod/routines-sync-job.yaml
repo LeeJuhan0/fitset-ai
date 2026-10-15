@@ -22,7 +22,7 @@ spec:
       containers:
         - name: routines-sync
           image: 729743892772.dkr.ecr.ap-northeast-2.amazonaws.com/fitset-ai-server:IMAGE_TAG
-          command: ["python", "-m", "app.routines.sync"]
+          command: ["sh", "-c", "alembic upgrade head && python -m app.routines.sync"]
           envFrom:
             - secretRef:
                 name: fitset-ai-server

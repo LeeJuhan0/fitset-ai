@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       sync_routines:
-        description: "prod 배포 전에 dev routines 를 prod 로 통째 복사"
+        description: "prod 배포 전에 dev routines, 논문 근거 테이블을 prod 로 통째 복사"
         type: boolean
         default: false
 
