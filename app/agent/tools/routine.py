@@ -54,7 +54,7 @@ async def run(user_id: str, args: dict) -> tuple[str, dict | None]:
         routine = await routines_service.generate_routine(user_id, request)
     except DomainError as exc:
         if failures.is_server_fault(exc):
-            logger.warning("recommend_routine server fault: %s", exc.code)
+            logger.warning("recommend_routine server fault: %s", exc.code, exc_info=True)
             return failures.SERVER_FAULT_NOTE, None
         logger.info("recommend_routine declined: %s", exc.code)
         return f"루틴을 만들지 못했습니다. 사유: {exc.message}", None
