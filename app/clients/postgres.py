@@ -1,8 +1,9 @@
 import logging
 from functools import lru_cache
 
+from psycopg.errors import QueryCanceled
 from sqlalchemy import URL, Engine, Select, create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -49,13 +50,29 @@ def _engine() -> Engine:
     )
 
 
-def fetch_all(stmt: Select) -> list[dict]:
+FETCH_FAILED = "루틴 검색 저장소 조회에 실패했습니다."
+
+
+def _rows(stmt: Select) -> list[dict]:
     """SELECT 1건 실행 후 dict 행 목록 반환"""
+    with Session(_engine()) as session:
+        return [dict(row) for row in session.execute(stmt).mappings().all()]
+
+
+def fetch_all(stmt: Select) -> list[dict]:
+    """SELECT 실행, 콜드 캐시 타임아웃 취소는 1회 재시도"""
     try:
-        with Session(_engine()) as session:
-            return [dict(row) for row in session.execute(stmt).mappings().all()]
+        return _rows(stmt)
+    except OperationalError as exc:
+        if not isinstance(exc.orig, QueryCanceled):
+            raise DomainError(FETCH_FAILED) from exc
+        logger.warning("postgres statement timeout, retrying once on warmed cache")
     except SQLAlchemyError as exc:
-        raise DomainError("루틴 검색 저장소 조회에 실패했습니다.") from exc
+        raise DomainError(FETCH_FAILED) from exc
+    try:
+        return _rows(stmt)
+    except SQLAlchemyError as exc:
+        raise DomainError(FETCH_FAILED) from exc
 
 
 def ping() -> bool:
